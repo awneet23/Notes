@@ -1,4 +1,4 @@
-import type { BoardDocument, BoardElement } from './types'
+import type { BoardDocument, BoardElement, CanvasPattern } from './types'
 import { boundsOf, smoothPath } from './geometry'
 import { extendedShapePath, ICON_PATHS, type ExtendedShape } from './vectorLibrary'
 
@@ -36,11 +36,28 @@ function elementSvg(el: BoardElement): string {
   return ''
 }
 
-export function createSvg(elements: BoardElement[], background = '#ffffff'): { svg: string; width: number; height: number } {
+const patternDefinition = (pattern: CanvasPattern, color: string) => {
+  if (pattern === 'plain') return ''
+  if (pattern === 'dots') return `<pattern id="stillboard-paper" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="${color}"/></pattern>`
+  if (pattern === 'grid') return `<pattern id="stillboard-paper" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="${color}" stroke-width="0.8"/></pattern>`
+  if (pattern === 'ruled') return `<pattern id="stillboard-paper" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M0 31.5H32" fill="none" stroke="${color}" stroke-width="0.8"/></pattern>`
+  return `<pattern id="stillboard-paper" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M13 16h6M16 13v6" fill="none" stroke="${color}" stroke-width="0.9" stroke-linecap="round"/></pattern>`
+}
+
+const isDark = (color: string) => {
+  const value = color.replace('#', '')
+  if (value.length !== 6) return false
+  const [r, g, b] = [0, 2, 4].map(index => parseInt(value.slice(index, index + 2), 16))
+  return (r * 299 + g * 587 + b * 114) / 1000 < 118
+}
+
+export function createSvg(elements: BoardElement[], background = '#ffffff', canvasPattern: CanvasPattern = 'plain'): { svg: string; width: number; height: number } {
   const b = boundsOf(elements) ?? { x: 0, y: 0, width: 1200, height: 800 }
   const pad = 32
   const width = Math.max(Math.ceil(b.width + pad * 2), 1), height = Math.max(Math.ceil(b.height + pad * 2), 1)
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${b.x - pad} ${b.y - pad} ${width} ${height}"><defs><marker id="stillboard-arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M 0 0 L 8 4 L 0 8" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs><rect x="${b.x - pad}" y="${b.y - pad}" width="${width}" height="${height}" fill="${background}"/>${elements.map(elementSvg).join('')}</svg>`
+  const pattern = patternDefinition(canvasPattern, isDark(background) ? '#59645f' : '#d5d5cf')
+  const paperOverlay = canvasPattern === 'plain' ? '' : `<rect x="${b.x - pad}" y="${b.y - pad}" width="${width}" height="${height}" fill="url(#stillboard-paper)"/>`
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${b.x - pad} ${b.y - pad} ${width} ${height}"><defs><marker id="stillboard-arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M 0 0 L 8 4 L 0 8" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>${pattern}</defs><rect x="${b.x - pad}" y="${b.y - pad}" width="${width}" height="${height}" fill="${background}"/>${paperOverlay}${elements.map(elementSvg).join('')}</svg>`
   return { svg, width, height }
 }
 
@@ -55,13 +72,13 @@ export function exportProject(doc: BoardDocument) {
   downloadBlob(new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' }), `${safeName(doc.name)}.stillboard`)
 }
 
-export function exportSvg(elements: BoardElement[], name: string, background = '#ffffff') {
-  const { svg } = createSvg(elements, background)
+export function exportSvg(elements: BoardElement[], name: string, background = '#ffffff', canvasPattern: CanvasPattern = 'plain') {
+  const { svg } = createSvg(elements, background, canvasPattern)
   downloadBlob(new Blob([svg], { type: 'image/svg+xml' }), `${safeName(name)}.svg`)
 }
 
-export async function exportPng(elements: BoardElement[], name: string, background = '#ffffff') {
-  const { svg, width, height } = createSvg(elements, background)
+export async function exportPng(elements: BoardElement[], name: string, background = '#ffffff', canvasPattern: CanvasPattern = 'plain') {
+  const { svg, width, height } = createSvg(elements, background, canvasPattern)
   const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }))
   const img = new Image()
   await new Promise<void>((resolve, reject) => { img.onload = () => resolve(); img.onerror = reject; img.src = url })

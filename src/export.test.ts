@@ -14,7 +14,7 @@ describe('vector export', () => {
       { ...base, id: 'heart', type: 'icon', iconName: 'heart' },
     ]
 
-    const { svg, width, height } = createSvg(elements, '#eaf1f8')
+    const { svg, width, height } = createSvg(elements, '#eaf1f8', 'grid')
     expect(width).toBeGreaterThan(100)
     expect(height).toBeGreaterThan(50)
     expect(svg).toContain('<rect width="100" height="50"')
@@ -24,5 +24,7 @@ describe('vector export', () => {
     expect(svg).toContain('fill="#eaf1f8"')
     expect(svg).toContain('viewBox="0 0 24 24"')
     expect(svg).toContain('a5.5 5.5')
+    expect(svg).toContain('id="stillboard-paper"')
+    expect(svg).toContain('fill="url(#stillboard-paper)"')
   })
 })

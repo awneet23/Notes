@@ -27,6 +27,7 @@ export type BoardElement = {
 }
 
 export type ViewState = { x: number; y: number; zoom: number }
+export type CanvasPattern = 'plain' | 'dots' | 'grid' | 'ruled' | 'cross'
 
 export type BoardDocument = {
   id: string
@@ -34,6 +35,7 @@ export type BoardDocument = {
   elements: BoardElement[]
   view: ViewState
   background?: string
+  canvasPattern?: CanvasPattern
   createdAt: number
   updatedAt: number
   version: 1
@@ -45,7 +47,8 @@ export const uid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()
 
 export const DEFAULT_VIEW: ViewState = { x: 0, y: 0, zoom: 1 }
 export const DEFAULT_BACKGROUND = '#f8f7f3'
+export const DEFAULT_CANVAS_PATTERN: CanvasPattern = 'dots'
 
 export const newDocument = (name = 'Untitled board'): BoardDocument => ({
-  id: uid(), name, elements: [], view: { ...DEFAULT_VIEW }, background: DEFAULT_BACKGROUND, createdAt: Date.now(), updatedAt: Date.now(), version: 1,
+  id: uid(), name, elements: [], view: { ...DEFAULT_VIEW }, background: DEFAULT_BACKGROUND, canvasPattern: DEFAULT_CANVAS_PATTERN, createdAt: Date.now(), updatedAt: Date.now(), version: 1,
 })

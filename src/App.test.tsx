@@ -195,8 +195,11 @@ describe('Stillboard core interactions', () => {
   it('changes the canvas background without showing a text-entry box', async () => {
     render(<App />)
     const canvas = await screen.findByLabelText('Infinite whiteboard canvas')
-    fireEvent.click(screen.getByRole('button', { name: 'Canvas background #eaf1f8' }))
-    expect(canvas.querySelector('rect')?.getAttribute('fill')).toBe('#eaf1f8')
+    fireEvent.click(screen.getByRole('button', { name: 'Canvas settings' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Canvas background #e5eff9' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Canvas pattern Grid' }))
+    expect(canvas.querySelector('rect')?.getAttribute('fill')).toBe('#e5eff9')
+    expect(canvas.querySelector('#canvas-paper')).not.toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: 'Text tool' }))
     fireEvent.pointerDown(canvas, { button: 0, pointerId: 11, clientX: 300, clientY: 250 })
@@ -207,7 +210,24 @@ describe('Stillboard core interactions', () => {
     expect(editorStyle.borderTopStyle).toBe('none')
     expect(editorStyle.backgroundColor).toBe('rgba(0, 0, 0, 0)')
     expect(editorStyle.resize).toBe('none')
-    await waitFor(() => expect(vi.mocked(saveDocument).mock.calls.some(([doc]) => doc.background === '#eaf1f8')).toBe(true), { timeout: 1500 })
+    await waitFor(() => expect(vi.mocked(saveDocument).mock.calls.some(([doc]) => doc.background === '#e5eff9' && doc.canvasPattern === 'grid')).toBe(true), { timeout: 1500 })
+  })
+
+  it('keeps appearance options compact and removes the light header haze on dark plain canvas', async () => {
+    const { container } = render(<App />)
+    const canvas = await screen.findByLabelText('Infinite whiteboard canvas')
+    expect(screen.queryByRole('button', { name: 'Canvas background #161918' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Canvas settings' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Canvas background #161918' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Canvas pattern Plain' }))
+    expect(container.querySelector('main')?.className).toContain('dark-canvas')
+    expect(getComputedStyle(container.querySelector('.topbar')!).backgroundImage).toBe('none')
+    expect(canvas.querySelector('#canvas-paper')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Text tool' }))
+    expect(screen.getByRole('combobox', { name: 'Font size' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Canvas background #ffffff' })).toBeNull()
   })
 
   it('reopens existing text, continues it in place, and deletes it when emptied', async () => {

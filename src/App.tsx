@@ -2,18 +2,22 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import {
   ArrowRight, Bold, BoxSelect, Check, ChevronDown, Circle, Cloud, Copy, Cylinder, Database, Diamond, Download, Eraser,
   FileJson, Flag, Focus, FolderOpen, Hand, Heart, Hexagon, House, Italic, Lightbulb, Menu, MessageSquare, MousePointer2, Pencil, Pentagon, Plus, Redo2,
-  Save, Shapes, Slash, Square, Star, Trash2, Triangle, Type, Undo2, UserRound, X, ZoomIn, ZoomOut,
+  PaintBucket, Palette, Save, Shapes, Slash, Square, Star, Trash2, Triangle, Type, Undo2, UserRound, X, ZoomIn, ZoomOut,
 } from 'lucide-react'
-import type { BoardDocument, BoardElement, NoteMeta, Point, Tool, ViewState } from './types'
-import { DEFAULT_BACKGROUND, DEFAULT_VIEW, newDocument, uid } from './types'
+import type { BoardDocument, BoardElement, CanvasPattern, NoteMeta, Point, Tool, ViewState } from './types'
+import { DEFAULT_BACKGROUND, DEFAULT_CANVAS_PATTERN, DEFAULT_VIEW, newDocument, uid } from './types'
 import { boundsOf, normalizedBox, pointsToElement, recognizeStroke, smoothPath } from './geometry'
 import { deleteDocument, getDocument, listDocuments, saveDocument } from './db'
 import { exportPng, exportProject, exportSvg } from './export'
 import { extendedShapePath, ICON_PATHS, type ExtendedShape } from './vectorLibrary'
 
-const COLORS = ['#1e2522', '#e05252', '#dc7d26', '#d1a617', '#3b8b65', '#3178c6', '#7357bd', '#f2f2ee']
-const FILLS = ['transparent', '#fff1a8', '#dff3e8', '#deecff', '#f0e6ff', '#ffe4e4']
-const CANVAS_BACKGROUNDS = ['#f8f7f3', '#ffffff', '#f6f0df', '#eaf3ed', '#eaf1f8', '#f2ecf7', '#242a27']
+const COLORS = ['#1e2522', '#5f6360', '#e05252', '#e87926', '#d1a617', '#3b8b65', '#238b8e', '#3178c6', '#7357bd', '#c65b9a', '#f2f2ee']
+const FILLS = ['transparent', '#fff1a8', '#f8dfca', '#ffe4e4', '#dff3e8', '#d9f1ef', '#deecff', '#f0e6ff', '#ecefed']
+const CANVAS_BACKGROUNDS = ['#ffffff', '#f8f7f3', '#fbf3dc', '#eadfca', '#f8e8e8', '#e4eee7', '#e4f3ef', '#e5eff9', '#eee8f7', '#eceff1', '#26302c', '#1f2937', '#161918']
+const CANVAS_PATTERNS: { value: CanvasPattern; label: string }[] = [
+  { value: 'plain', label: 'Plain' }, { value: 'dots', label: 'Dots' }, { value: 'grid', label: 'Grid' },
+  { value: 'ruled', label: 'Ruled' }, { value: 'cross', label: 'Cross' },
+]
 const TOOL_ITEMS: { tool: Tool; label: string; key: string; icon: typeof MousePointer2 }[] = [
   { tool: 'select', label: 'Select', key: 'V', icon: MousePointer2 },
   { tool: 'hand', label: 'Hand', key: 'H', icon: Hand },
@@ -37,6 +41,7 @@ const ICON_ITEMS: { name: string; label: string; icon: typeof Check }[] = [
   { name: 'database', label: 'Database', icon: Database }, { name: 'flag', label: 'Flag', icon: Flag },
 ]
 const LIBRARY_TOOLS: Tool[] = [...SHAPE_ITEMS.map(item => item.tool), 'icon']
+type StyleMenu = 'canvas' | 'stroke' | 'fill' | 'width' | null
 
 type Interaction =
   | { type: 'pan'; start: Point; view: ViewState }
@@ -56,6 +61,13 @@ const textDimensions = (value: string, size: number) => {
   const lines = value.split('\n')
   const longest = Math.max(0, ...lines.map(line => line.length))
   return { width: Math.max(3, longest * size * .62 + 2), height: Math.max(size * 1.3, lines.length * size * 1.3) }
+}
+
+const isDarkColor = (color: string) => {
+  const value = color.replace('#', '')
+  if (value.length !== 6) return false
+  const [r, g, b] = [0, 2, 4].map(index => parseInt(value.slice(index, index + 2), 16))
+  return (r * 299 + g * 587 + b * 114) / 1000 < 118
 }
 
 const textCaretFromPoint = (el: BoardElement, point: Point) => {
@@ -85,6 +97,7 @@ function App() {
   const [elements, setElements] = useState<BoardElement[]>([])
   const [view, setView] = useState<ViewState>({ ...DEFAULT_VIEW })
   const [background, setBackground] = useState(DEFAULT_BACKGROUND)
+  const [canvasPattern, setCanvasPattern] = useState<CanvasPattern>(DEFAULT_CANVAS_PATTERN)
   const [tool, setTool] = useState<Tool>('select')
   const [selected, setSelected] = useState<string[]>([])
   const [interaction, setInteraction] = useState<Interaction>(null)
@@ -93,6 +106,7 @@ function App() {
   const [notesOpen, setNotesOpen] = useState(false)
   const [fileOpen, setFileOpen] = useState(false)
   const [libraryOpen, setLibraryOpen] = useState(false)
+  const [styleMenu, setStyleMenu] = useState<StyleMenu>(null)
   const [selectedIcon, setSelectedIcon] = useState('check')
   const [status, setStatus] = useState<'saved' | 'saving' | 'unsaved'>('saved')
   const [stroke, setStroke] = useState('#1e2522')
@@ -125,7 +139,7 @@ function App() {
 
   const loadDoc = useCallback(async (doc: BoardDocument, restored = false) => {
     skipSaveRef.current = true
-    setCurrentId(doc.id); setName(doc.name); setElements(doc.elements ?? []); setView(doc.view ?? { ...DEFAULT_VIEW }); setBackground(doc.background ?? DEFAULT_BACKGROUND)
+    setCurrentId(doc.id); setName(doc.name); setElements(doc.elements ?? []); setView(doc.view ?? { ...DEFAULT_VIEW }); setBackground(doc.background ?? DEFAULT_BACKGROUND); setCanvasPattern(doc.canvasPattern ?? DEFAULT_CANVAS_PATTERN)
     createdAtRef.current = doc.createdAt ?? Date.now()
     historyRef.current = []; futureRef.current = []; setSelected([]); setTextEdit(null); setStatus('saved')
     localStorage.setItem('stillboard:last-note', doc.id)
@@ -149,8 +163,8 @@ function App() {
   }, [loadDoc])
 
   const currentDocument = useCallback((): BoardDocument => ({
-    id: currentId, name, elements, view, background, version: 1, createdAt: createdAtRef.current, updatedAt: Date.now(),
-  }), [currentId, name, elements, view, background])
+    id: currentId, name, elements, view, background, canvasPattern, version: 1, createdAt: createdAtRef.current, updatedAt: Date.now(),
+  }), [currentId, name, elements, view, background, canvasPattern])
 
   useEffect(() => {
     if (!ready || !currentId || skipSaveRef.current) return
@@ -162,7 +176,7 @@ function App() {
       catch { setStatus('unsaved') }
     }, 650)
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
-  }, [elements, name, view, background, ready, currentId, currentDocument, refreshNotes])
+  }, [elements, name, view, background, canvasPattern, ready, currentId, currentDocument, refreshNotes])
 
   const pushHistory = useCallback(() => {
     historyRef.current = [...historyRef.current.slice(-99), cloneElements(elements)]
@@ -249,6 +263,7 @@ function App() {
   const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
     if (e.button === 2) return
     if (libraryOpen) setLibraryOpen(false)
+    if (styleMenu) setStyleMenu(null)
     const target = (e.target as Element).closest?.('[data-element-id]') as SVGElement | null
     const hitId = target?.dataset.elementId
     const hitElement = elements.find(el => el.id === hitId)
@@ -435,7 +450,7 @@ function App() {
     try {
       const parsed = JSON.parse(await file.text()) as BoardDocument
       if (!Array.isArray(parsed.elements)) throw new Error('Invalid project')
-      const doc: BoardDocument = { ...parsed, id: uid(), name: parsed.name ? `${parsed.name} (imported)` : file.name.replace(/\.(stillboard|json)$/i, ''), version: 1, createdAt: Date.now(), updatedAt: Date.now(), view: parsed.view ?? { ...DEFAULT_VIEW }, background: parsed.background ?? DEFAULT_BACKGROUND }
+      const doc: BoardDocument = { ...parsed, id: uid(), name: parsed.name ? `${parsed.name} (imported)` : file.name.replace(/\.(stillboard|json)$/i, ''), version: 1, createdAt: Date.now(), updatedAt: Date.now(), view: parsed.view ?? { ...DEFAULT_VIEW }, background: parsed.background ?? DEFAULT_BACKGROUND, canvasPattern: parsed.canvasPattern ?? DEFAULT_CANVAS_PATTERN }
       await saveDocument(currentDocument()); await saveDocument(doc); await loadDoc(doc); await refreshNotes(); showToast('Project imported locally')
     } catch { showToast('That file is not a valid Stillboard project') }
     if (importRef.current) importRef.current.value = ''
@@ -457,7 +472,7 @@ function App() {
       if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); manualSave(); return }
       if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); setSelected(elements.map(el => el.id)); setTool('select'); return }
       if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelection(); return }
-      if (e.key === 'Escape') { setSelected([]); setTextEdit(null); setLibraryOpen(false); setInteractionBoth(null); return }
+      if (e.key === 'Escape') { setSelected([]); setTextEdit(null); setLibraryOpen(false); setStyleMenu(null); setInteractionBoth(null); return }
       const found = TOOL_ITEMS.find(item => item.key.toLowerCase() === e.key.toLowerCase())
       const shapeShortcut = ({ r: 'rectangle', o: 'ellipse', d: 'diamond' } as Record<string, Tool>)[e.key.toLowerCase()]
       if (found && !e.ctrlKey && !e.metaKey) { setTool(found.tool); setLibraryOpen(false) }
@@ -474,12 +489,14 @@ function App() {
   const selectionBounds = useMemo(() => boundsOf(selectedElements), [selectedElements])
   const draftShape = interaction?.type === 'shape' ? makeShape(interaction.tool, interaction.start, interaction.current, false) : null
   const editorDimensions = textEdit ? textDimensions(textEdit.value, fontSize) : null
-  const gridColor = background === '#242a27' ? '#515a55' : '#d8d7d1'
+  const darkCanvas = isDarkColor(background)
+  const gridColor = darkCanvas ? '#59645f' : '#d3d4ce'
+  const paperSize = (canvasPattern === 'dots' ? 24 : 32) * view.zoom
 
   if (!ready) return <div className="loading"><div className="brand-mark">S</div><span>Opening your local boards…</span></div>
 
   return (
-    <main className={`app tool-${tool} ${spaceDown ? 'space-pan' : ''}`}>
+    <main className={`app tool-${tool} ${spaceDown ? 'space-pan' : ''} ${darkCanvas ? 'dark-canvas' : ''}`}>
       <header className="topbar">
         <div className="brand" aria-label="Stillboard"><span className="brand-mark">S</span><span>Stillboard</span></div>
         <button className="board-title" onClick={() => setNotesOpen(v => !v)} aria-label="Open board switcher">
@@ -509,17 +526,17 @@ function App() {
         <button onClick={() => { exportProject(currentDocument()); setFileOpen(false) }}><FileJson size={17}/><span><strong>Save project file</strong><small>Editable .stillboard file</small></span></button>
         <button onClick={() => { importRef.current?.click(); setFileOpen(false) }}><FolderOpen size={17}/><span><strong>Open project file</strong><small>Import from your computer</small></span></button>
         <div className="menu-separator"/>
-        <button onClick={() => { exportPng(exportElements, name, background); setFileOpen(false) }}><Download size={17}/><span><strong>Export PNG</strong><small>{selected.length ? 'Selected objects' : 'Entire board'}</small></span></button>
-        <button onClick={() => { exportSvg(exportElements, name, background); setFileOpen(false) }}><Download size={17}/><span><strong>Export SVG</strong><small>{selected.length ? 'Selected objects' : 'Editable vectors'}</small></span></button>
+        <button onClick={() => { exportPng(exportElements, name, background, canvasPattern); setFileOpen(false) }}><Download size={17}/><span><strong>Export PNG</strong><small>{selected.length ? 'Selected objects' : 'Entire board'}</small></span></button>
+        <button onClick={() => { exportSvg(exportElements, name, background, canvasPattern); setFileOpen(false) }}><Download size={17}/><span><strong>Export SVG</strong><small>{selected.length ? 'Selected objects' : 'Editable vectors'}</small></span></button>
       </div>}
 
       <input ref={importRef} hidden type="file" accept=".stillboard,.json,application/json" onChange={e => e.target.files?.[0] && importFile(e.target.files[0])}/>
 
       <nav className="toolbar" aria-label="Drawing tools">
         {TOOL_ITEMS.map(({ tool: item, label, key, icon: Icon }, index) => <div key={item} className={index === 4 || index === 5 ? 'tool-divider-before' : ''}>
-          <button className={tool === item ? 'active' : ''} onClick={() => { setTool(item); setLibraryOpen(false); if (item !== 'select') setSelected([]) }} aria-label={`${label} tool`} title={`${label} (${key})`}><Icon size={19}/><kbd>{key}</kbd></button>
+          <button className={tool === item ? 'active' : ''} onClick={() => { setTool(item); setLibraryOpen(false); setStyleMenu(null); if (item !== 'select') setSelected([]) }} aria-label={`${label} tool`} title={`${label} (${key})`}><Icon size={19}/><kbd>{key}</kbd></button>
         </div>)}
-        <div className="tool-divider-before library-tool"><button className={LIBRARY_TOOLS.includes(tool) ? 'active' : ''} onClick={() => setLibraryOpen(open => !open)} aria-label="Shapes and icons" title="Shapes and icons (R / O / D)"><Shapes size={20}/><ChevronDown className="tool-chevron" size={10}/></button></div>
+        <div className="tool-divider-before library-tool"><button className={LIBRARY_TOOLS.includes(tool) ? 'active' : ''} onClick={() => { setLibraryOpen(open => !open); setStyleMenu(null) }} aria-label="Shapes and icons" title="Shapes and icons (R / O / D)"><Shapes size={20}/><ChevronDown className="tool-chevron" size={10}/></button></div>
       </nav>
 
       {libraryOpen && <div className="popover shape-library" role="dialog" aria-label="Shape and icon library">
@@ -532,8 +549,16 @@ function App() {
           const id = ((e.target as Element).closest?.('[data-element-id]') as SVGElement | null)?.dataset.elementId
           const el = elements.find(item => item.id === id); if (el?.type === 'text') { e.stopPropagation(); const p = worldPoint(e.clientX, e.clientY); beginText(p, el, textCaretFromPoint(el, p)) }
         }}>
-          <defs><pattern id="minor-grid" width={24 * view.zoom} height={24 * view.zoom} patternUnits="userSpaceOnUse" x={view.x % (24 * view.zoom)} y={view.y % (24 * view.zoom)}><circle cx="1" cy="1" r="1" fill={gridColor}/></pattern><marker id="arrowhead" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M 0 0 L 8 4 L 0 8" fill="none" stroke="context-stroke" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></marker></defs>
-          <rect width="100%" height="100%" fill={background}/><rect width="100%" height="100%" fill="url(#minor-grid)"/>
+          <defs>
+            {canvasPattern !== 'plain' && <pattern id="canvas-paper" width={paperSize} height={paperSize} patternUnits="userSpaceOnUse" x={view.x % paperSize} y={view.y % paperSize}>
+              {canvasPattern === 'dots' && <circle cx={1.2 * view.zoom} cy={1.2 * view.zoom} r={Math.max(.8, view.zoom)} fill={gridColor}/>} 
+              {canvasPattern === 'grid' && <path d={`M ${paperSize} 0 H 0 V ${paperSize}`} fill="none" stroke={gridColor} strokeWidth={Math.max(.6, view.zoom * .7)}/>} 
+              {canvasPattern === 'ruled' && <path d={`M 0 ${paperSize - .5} H ${paperSize}`} fill="none" stroke={gridColor} strokeWidth={Math.max(.6, view.zoom * .7)}/>} 
+              {canvasPattern === 'cross' && <path d={`M ${paperSize / 2 - 3 * view.zoom} ${paperSize / 2} h ${6 * view.zoom} M ${paperSize / 2} ${paperSize / 2 - 3 * view.zoom} v ${6 * view.zoom}`} fill="none" stroke={gridColor} strokeWidth={Math.max(.7, view.zoom * .8)} strokeLinecap="round"/>}
+            </pattern>}
+            <marker id="arrowhead" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M 0 0 L 8 4 L 0 8" fill="none" stroke="context-stroke" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></marker>
+          </defs>
+          <rect width="100%" height="100%" fill={background}/>{canvasPattern !== 'plain' && <rect width="100%" height="100%" fill="url(#canvas-paper)"/>}
           <g transform={`translate(${view.x} ${view.y}) scale(${view.zoom})`}>
             {elements.map(el => el.id === textEdit?.id ? null : <ElementView key={el.id} el={el} selected={selected.includes(el.id)}/>) }
             {interaction?.type === 'draw' && <path d={smoothPath(interaction.points)} fill="none" stroke={stroke} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke"/>}
@@ -549,10 +574,30 @@ function App() {
       <div className="zoom-controls"><button onClick={() => zoomAt(view.zoom / 1.2)} aria-label="Zoom out"><ZoomOut size={17}/></button><button className="zoom-readout" onClick={() => zoomAt(1)}>{Math.round(view.zoom * 100)}%</button><button onClick={() => zoomAt(view.zoom * 1.2)} aria-label="Zoom in"><ZoomIn size={17}/></button><span/><button onClick={fitCanvas} aria-label="Fit canvas" title="Fit canvas"><Focus size={17}/></button></div>
 
       <div className="stylebar">
-        <div className="style-group canvas-colors"><span className="style-label">Canvas</span>{CANVAS_BACKGROUNDS.map(color => <button key={color} aria-label={`Canvas background ${color}`} className={`color-swatch canvas-swatch ${background === color ? 'active' : ''}`} style={{ background: color }} onClick={() => setBackground(color)}/>)}</div>
-        <div className="style-group"><span className="style-label">Stroke</span>{COLORS.map(color => <button key={color} aria-label={`Stroke ${color}`} className={`color-swatch ${stroke === color ? 'active' : ''}`} style={{ background: color }} onClick={() => { setStroke(color); applyStyle({ stroke: color }) }}/>)}</div>
-        {tool !== 'pen' && tool !== 'text' && tool !== 'icon' && !selectedElements.some(el => el.type === 'icon') && <div className="style-group"><span className="style-label">Fill</span>{FILLS.map(color => <button key={color} aria-label={`Fill ${color}`} className={`color-swatch fill ${fill === color ? 'active' : ''} ${color === 'transparent' ? 'transparent' : ''}`} style={{ background: color === 'transparent' ? '#fff' : color }} onClick={() => { setFill(color); applyStyle({ fill: color }) }}/>)}</div>}
-        <div className="style-group widths"><span className="style-label">Width</span>{[2, 3, 6].map(width => <button key={width} className={strokeWidth === width ? 'active' : ''} onClick={() => { setStrokeWidth(width); applyStyle({ strokeWidth: width }) }} aria-label={`Stroke width ${width}`}><i style={{ height: width }}/></button>)}</div>
+        <div className="property-control">
+          <button className={`property-trigger ${styleMenu === 'canvas' ? 'active' : ''}`} onClick={() => { setStyleMenu(styleMenu === 'canvas' ? null : 'canvas'); setLibraryOpen(false) }} aria-label="Canvas settings"><Palette size={17}/><span>Canvas</span><i className="property-swatch canvas-swatch" style={{ background }}/><ChevronDown size={13}/></button>
+          {styleMenu === 'canvas' && <div className="property-popover canvas-properties" role="dialog" aria-label="Canvas appearance">
+            <div className="property-heading"><strong>Canvas appearance</strong><small>Saved with this board</small></div>
+            <span className="menu-label">Color</span>
+            <div className="swatch-grid">{CANVAS_BACKGROUNDS.map(color => <button key={color} aria-label={`Canvas background ${color}`} className={`color-swatch canvas-swatch ${background === color ? 'active' : ''}`} style={{ background: color }} onClick={() => setBackground(color)}/>)}</div>
+            <label className="custom-color"><input type="color" aria-label="Custom canvas color" value={background} onChange={e => setBackground(e.target.value)}/><Plus size={14}/><span>Custom color</span></label>
+            <span className="menu-label pattern-label">Paper style</span>
+            <div className="pattern-options">{CANVAS_PATTERNS.map(pattern => <button key={pattern.value} className={canvasPattern === pattern.value ? 'active' : ''} aria-label={`Canvas pattern ${pattern.label}`} onClick={() => setCanvasPattern(pattern.value)}><i className={`pattern-preview pattern-${pattern.value}`}/><span>{pattern.label}</span>{canvasPattern === pattern.value && <Check size={13}/>}</button>)}</div>
+          </div>}
+        </div>
+        <span className="property-separator"/>
+        <div className="property-control">
+          <button className={`property-trigger compact ${styleMenu === 'stroke' ? 'active' : ''}`} onClick={() => setStyleMenu(styleMenu === 'stroke' ? null : 'stroke')} aria-label="Stroke color"><span className="property-swatch round" style={{ background: stroke }}/><span>Stroke</span><ChevronDown size={13}/></button>
+          {styleMenu === 'stroke' && <div className="property-popover color-properties" role="dialog" aria-label="Stroke colors"><span className="menu-label">Stroke color</span><div className="swatch-grid">{COLORS.map(color => <button key={color} aria-label={`Stroke ${color}`} className={`color-swatch ${stroke === color ? 'active' : ''}`} style={{ background: color }} onClick={() => { setStroke(color); applyStyle({ stroke: color }) }}/>)}</div><label className="custom-color"><input type="color" aria-label="Custom stroke color" value={stroke} onChange={e => { setStroke(e.target.value); applyStyle({ stroke: e.target.value }) }}/><Plus size={14}/><span>Custom color</span></label></div>}
+        </div>
+        {tool !== 'pen' && tool !== 'text' && tool !== 'icon' && !selectedElements.some(el => el.type === 'icon') && <div className="property-control">
+          <button className={`property-trigger compact ${styleMenu === 'fill' ? 'active' : ''}`} onClick={() => setStyleMenu(styleMenu === 'fill' ? null : 'fill')} aria-label="Fill color"><PaintBucket size={16}/><span className={`property-swatch square ${fill === 'transparent' ? 'transparent' : ''}`} style={{ background: fill === 'transparent' ? '#fff' : fill }}/><span>Fill</span><ChevronDown size={13}/></button>
+          {styleMenu === 'fill' && <div className="property-popover color-properties" role="dialog" aria-label="Fill colors"><span className="menu-label">Fill color</span><div className="swatch-grid">{FILLS.map(color => <button key={color} aria-label={`Fill ${color}`} className={`color-swatch fill ${fill === color ? 'active' : ''} ${color === 'transparent' ? 'transparent' : ''}`} style={{ background: color === 'transparent' ? '#fff' : color }} onClick={() => { setFill(color); applyStyle({ fill: color }) }}/>)}</div><label className="custom-color"><input type="color" aria-label="Custom fill color" value={fill === 'transparent' ? '#fff1a8' : fill} onChange={e => { setFill(e.target.value); applyStyle({ fill: e.target.value }) }}/><Plus size={14}/><span>Custom color</span></label></div>}
+        </div>}
+        <div className="property-control">
+          <button className={`property-trigger compact ${styleMenu === 'width' ? 'active' : ''}`} onClick={() => setStyleMenu(styleMenu === 'width' ? null : 'width')} aria-label="Stroke width"><i className="width-preview" style={{ height: strokeWidth }}/><span>Width</span><ChevronDown size={13}/></button>
+          {styleMenu === 'width' && <div className="property-popover width-properties" role="dialog" aria-label="Stroke widths"><span className="menu-label">Stroke width</span>{[1, 2, 3, 5, 8].map(width => <button key={width} className={strokeWidth === width ? 'active' : ''} onClick={() => { setStrokeWidth(width); applyStyle({ strokeWidth: width }) }} aria-label={`Stroke width ${width}`}><i style={{ height: width }}/><span>{width === 1 ? 'Fine' : width <= 3 ? 'Regular' : width <= 5 ? 'Bold' : 'Heavy'}</span>{strokeWidth === width && <Check size={14}/>}</button>)}</div>}
+        </div>
         {(tool === 'text' || selectedElements.some(el => el.type === 'text')) && <>
           <div className="style-group text-format"><select aria-label="Font family" value={fontFamily} onChange={e => { setFontFamily(e.target.value); applyStyle({ fontFamily: e.target.value }) }}><option value="Inter, system-ui, sans-serif">Sans</option><option value="Georgia, serif">Serif</option><option value="ui-monospace, SFMono-Regular, monospace">Mono</option></select><select aria-label="Font size" value={fontSize} onChange={e => { const size = Number(e.target.value); setFontSize(size); applyStyle({ fontSize: size }) }}>{[14,18,22,28,36,48,64].map(size => <option key={size}>{size}</option>)}</select><button className={bold ? 'active' : ''} onClick={() => { setBold(!bold); applyStyle({ bold: !bold }) }} aria-label="Bold"><Bold size={16}/></button><button className={italic ? 'active' : ''} onClick={() => { setItalic(!italic); applyStyle({ italic: !italic }) }} aria-label="Italic"><Italic size={16}/></button>
           <select aria-label="Text alignment" value={align} onChange={e => { const a = e.target.value as typeof align; setAlign(a); applyStyle({ align: a }) }}><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option></select></div>

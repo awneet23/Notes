@@ -36,6 +36,8 @@ npm test -- --maxWorkers=1
 
 The File menu exports editable `.stillboard` project files as well as PNG and SVG. If objects are selected, PNG/SVG export contains the selection; otherwise it contains the entire board.
 
+The compact Canvas menu controls each board's color and paper style. Available paper styles are Plain, Dots, Grid, Ruled, and Cross, and custom colors can be chosen with the color picker. These settings are stored locally and preserved in exports.
+
 ## Privacy model
 
 All authored content is persisted through the browser's IndexedDB and explicit local file downloads. The app makes no runtime network requests and includes no remote fonts, remote images, analytics, or content APIs. Package downloads are needed only while installing/building the app.
