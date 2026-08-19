@@ -182,4 +182,40 @@ describe('Stillboard core interactions', () => {
     expect(editorStyle.resize).toBe('none')
     await waitFor(() => expect(vi.mocked(saveDocument).mock.calls.some(([doc]) => doc.background === '#eaf1f8')).toBe(true), { timeout: 1500 })
   })
+
+  it('reopens existing text, continues it in place, and deletes it when emptied', async () => {
+    render(<App />)
+    const canvas = await screen.findByLabelText('Infinite whiteboard canvas')
+    const textTool = screen.getByRole('button', { name: 'Text tool' })
+    fireEvent.click(textTool)
+
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 12, clientX: 120, clientY: 120 })
+    let editor = await screen.findByLabelText('Canvas text editor') as HTMLTextAreaElement
+    fireEvent.change(editor, { target: { value: 'what is up' } })
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 13, clientX: 500, clientY: 300 })
+    const originalText = await screen.findByText('what is up')
+    fireEvent.keyDown(screen.getByLabelText('Canvas text editor'), { key: 'Escape', code: 'Escape' })
+
+    fireEvent.pointerDown(originalText, { button: 0, pointerId: 14, clientX: 255, clientY: 130 })
+    editor = await screen.findByLabelText('Canvas text editor') as HTMLTextAreaElement
+    expect(editor).toHaveProperty('value', 'what is up')
+    expect(editor.selectionStart).toBe('what is up'.length)
+    expect(Array.from(canvas.querySelectorAll('tspan')).some(node => node.textContent === 'what is up')).toBe(false)
+
+    fireEvent.change(editor, { target: { value: 'what is up new world' } })
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 15, clientX: 600, clientY: 360 })
+    const continuedText = await screen.findByText('what is up new world')
+    expect(screen.queryByText('new world')).toBeNull()
+    fireEvent.keyDown(screen.getByLabelText('Canvas text editor'), { key: 'Escape', code: 'Escape' })
+
+    fireEvent.pointerDown(continuedText, { button: 0, pointerId: 16, clientX: 370, clientY: 130 })
+    editor = await screen.findByLabelText('Canvas text editor') as HTMLTextAreaElement
+    fireEvent.change(editor, { target: { value: '' } })
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 17, clientX: 650, clientY: 400 })
+    expect(screen.queryByText('what is up new world')).toBeNull()
+    fireEvent.keyDown(screen.getByLabelText('Canvas text editor'), { key: 'Escape', code: 'Escape' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await screen.findByText('what is up new world')
+  })
 })

@@ -36,7 +36,7 @@ type Interaction =
   | { type: 'rotate'; center: Point; startAngle: number; initial: BoardElement[]; ids: string[] }
   | null
 
-type TextEdit = { id?: string; x: number; y: number; value: string }
+type TextEdit = { id?: string; x: number; y: number; value: string; caret?: number }
 
 const cloneElements = (els: BoardElement[]) => els.map(el => ({ ...el, points: el.points?.map(p => ({ ...p })) }))
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform)
@@ -44,6 +44,26 @@ const textDimensions = (value: string, size: number) => {
   const lines = value.split('\n')
   const longest = Math.max(0, ...lines.map(line => line.length))
   return { width: Math.max(3, longest * size * .62 + 2), height: Math.max(size * 1.3, lines.length * size * 1.3) }
+}
+
+const textCaretFromPoint = (el: BoardElement, point: Point) => {
+  const value = el.text ?? ''
+  const lines = value.split('\n')
+  const size = el.fontSize ?? 22
+  const center = { x: el.x + el.width / 2, y: el.y + el.height / 2 }
+  const angle = -el.rotation * Math.PI / 180
+  const dx = point.x - center.x, dy = point.y - center.y
+  const local = {
+    x: center.x + dx * Math.cos(angle) - dy * Math.sin(angle) - el.x,
+    y: center.y + dx * Math.sin(angle) + dy * Math.cos(angle) - el.y,
+  }
+  const lineIndex = Math.max(0, Math.min(lines.length - 1, Math.floor(local.y / (size * 1.25))))
+  const line = lines[lineIndex] ?? ''
+  const charWidth = size * .62
+  const lineWidth = line.length * charWidth
+  const lineStart = el.align === 'center' ? (el.width - lineWidth) / 2 : el.align === 'right' ? el.width - lineWidth : 0
+  const character = Math.max(0, Math.min(line.length, Math.round((local.x - lineStart) / charWidth)))
+  return lines.slice(0, lineIndex).reduce((total, current) => total + current.length + 1, 0) + character
 }
 
 function App() {
@@ -169,11 +189,11 @@ function App() {
     }
   }, [stroke, fill, strokeWidth])
 
-  const beginText = useCallback((p: Point, el?: BoardElement) => {
+  const beginText = useCallback((p: Point, el?: BoardElement, caret?: number) => {
     if (el) {
       setFontSize(el.fontSize ?? 22); setFontFamily(el.fontFamily ?? fontFamily); setBold(Boolean(el.bold)); setItalic(Boolean(el.italic)); setAlign(el.align ?? 'left'); setStroke(el.stroke)
-      setTextEdit({ id: el.id, x: el.x, y: el.y, value: el.text ?? '' }); setSelected([el.id])
-    } else setTextEdit({ x: p.x, y: p.y, value: '' })
+      setTextEdit({ id: el.id, x: el.x, y: el.y, value: el.text ?? '', caret }); setSelected([el.id])
+    } else { setTextEdit({ x: p.x, y: p.y, value: '' }); setSelected([]) }
   }, [fontFamily])
 
   const finishText = useCallback(() => {
@@ -182,7 +202,12 @@ function App() {
     const dimensions = textDimensions(value, fontSize)
     if (textEdit.id) {
       const original = elements.find(el => el.id === textEdit.id)
-      if (original && value && value !== original.text) commit(prev => prev.map(el => el.id === textEdit.id ? { ...el, text: value, width: dimensions.width, height: dimensions.height, fontSize, fontFamily, bold, italic, align, stroke } : el))
+      if (original && !value) {
+        commit(prev => prev.filter(el => el.id !== textEdit.id))
+        setSelected([])
+      } else if (original && value !== original.text) {
+        commit(prev => prev.map(el => el.id === textEdit.id ? { ...el, text: value, width: dimensions.width, height: dimensions.height, fontSize, fontFamily, bold, italic, align, stroke } : el))
+      }
     } else if (value) {
       const el: BoardElement = { id: uid(), type: 'text', x: textEdit.x, y: textEdit.y, width: dimensions.width, height: dimensions.height, rotation: 0, stroke, fill: 'transparent', strokeWidth: 1, opacity: 1, text: value, fontSize, fontFamily, bold, italic, align }
       commit(prev => [...prev, el]); setSelected([el.id])
@@ -199,11 +224,11 @@ function App() {
       const editor = textAreaRef.current
       if (!editor) return
       editor.focus({ preventScroll: true })
-      const caret = editor.value.length
+      const caret = Math.max(0, Math.min(editor.value.length, textEdit.caret ?? editor.value.length))
       editor.setSelectionRange(caret, caret)
     })
     return () => cancelAnimationFrame(frame)
-  }, [textEdit?.id, textEdit?.x, textEdit?.y])
+  }, [textEdit?.id, textEdit?.x, textEdit?.y, textEdit?.caret])
 
   const setInteractionBoth = (next: Interaction) => { interactionRef.current = next; setInteraction(next) }
 
@@ -211,6 +236,7 @@ function App() {
     if (e.button === 2) return
     const target = (e.target as Element).closest?.('[data-element-id]') as SVGElement | null
     const hitId = target?.dataset.elementId
+    const hitElement = elements.find(el => el.id === hitId)
     const p = worldPoint(e.clientX, e.clientY)
     if (tool === 'text') {
       // Prevent the canvas pointer-down default from stealing focus after the
@@ -219,7 +245,8 @@ function App() {
       // A second canvas click commits the current text before opening the next
       // editor, so sticky Text mode can be used for several labels in a row.
       if (textEdit) finishText()
-      beginText(p)
+      if (hitElement?.type === 'text') beginText(p, hitElement, textCaretFromPoint(hitElement, p))
+      else beginText(p)
       return
     }
     svgRef.current?.setPointerCapture(e.pointerId)
@@ -478,12 +505,12 @@ function App() {
       <section className="canvas-wrap">
         <svg ref={svgRef} className="canvas" aria-label="Infinite whiteboard canvas" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onWheel={onWheel} onDoubleClick={e => {
           const id = ((e.target as Element).closest?.('[data-element-id]') as SVGElement | null)?.dataset.elementId
-          const el = elements.find(item => item.id === id); if (el?.type === 'text') { e.stopPropagation(); beginText({ x: el.x, y: el.y }, el) }
+          const el = elements.find(item => item.id === id); if (el?.type === 'text') { e.stopPropagation(); const p = worldPoint(e.clientX, e.clientY); beginText(p, el, textCaretFromPoint(el, p)) }
         }}>
           <defs><pattern id="minor-grid" width={24 * view.zoom} height={24 * view.zoom} patternUnits="userSpaceOnUse" x={view.x % (24 * view.zoom)} y={view.y % (24 * view.zoom)}><circle cx="1" cy="1" r="1" fill={gridColor}/></pattern><marker id="arrowhead" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M 0 0 L 8 4 L 0 8" fill="none" stroke="context-stroke" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></marker></defs>
           <rect width="100%" height="100%" fill={background}/><rect width="100%" height="100%" fill="url(#minor-grid)"/>
           <g transform={`translate(${view.x} ${view.y}) scale(${view.zoom})`}>
-            {elements.map(el => <ElementView key={el.id} el={el} selected={selected.includes(el.id)}/>) }
+            {elements.map(el => el.id === textEdit?.id ? null : <ElementView key={el.id} el={el} selected={selected.includes(el.id)}/>) }
             {interaction?.type === 'draw' && <path d={smoothPath(interaction.points)} fill="none" stroke={stroke} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke"/>}
             {draftShape && <ElementView el={draftShape} selected={false} draft/>}
             {interaction?.type === 'marquee' && (() => { const b = normalizedBox(interaction.start, interaction.current); return <rect x={b.x} y={b.y} width={b.width} height={b.height} className="marquee"/> })()}
@@ -533,7 +560,7 @@ function ElementView({ el, selected, draft = false }: { el: BoardElement; select
     content = <line x1={x1} y1={y1} x2={x2} y2={y2} {...common} markerEnd={el.type === 'arrow' ? 'url(#arrowhead)' : undefined}/>
   } else {
     const x = el.align === 'center' ? el.width / 2 : el.align === 'right' ? el.width : 0
-    content = <text x={x} y={el.fontSize ?? 22} fill={el.stroke} stroke="none" opacity={el.opacity} textAnchor={el.align === 'center' ? 'middle' : el.align === 'right' ? 'end' : 'start'} fontFamily={el.fontFamily} fontSize={el.fontSize} fontWeight={el.bold ? 700 : 400} fontStyle={el.italic ? 'italic' : 'normal'}>{(el.text ?? '').split('\n').map((line, i) => <tspan x={x} dy={i ? '1.25em' : undefined} key={i}>{line || ' '}</tspan>)}</text>
+    content = <><rect className="text-hit-area" width={el.width} height={el.height} fill="transparent" stroke="none" pointerEvents="all"/><text x={x} y={el.fontSize ?? 22} fill={el.stroke} stroke="none" opacity={el.opacity} textAnchor={el.align === 'center' ? 'middle' : el.align === 'right' ? 'end' : 'start'} fontFamily={el.fontFamily} fontSize={el.fontSize} fontWeight={el.bold ? 700 : 400} fontStyle={el.italic ? 'italic' : 'normal'}>{(el.text ?? '').split('\n').map((line, i) => <tspan x={x} dy={i ? '1.25em' : undefined} key={i}>{line || ' '}</tspan>)}</text></>
   }
   return <g transform={transform} {...attr} className={selected ? 'element selected-element' : 'element'}>{content}</g>
 }
