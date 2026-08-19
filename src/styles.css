@@ -173,7 +173,13 @@ button { color: inherit; }
 .selection-ui .rotate-handle { cursor: grab; }
 .marquee { fill: rgba(63,139,104,.08); stroke: #3f8b68; stroke-width: 1; stroke-dasharray: 5 3; vector-effect: non-scaling-stroke; }
 
-.text-editor { position: absolute; z-index: 30; min-width: 3px; min-height: 1em; padding: 0; border: 0; outline: 0; background: transparent; resize: none; overflow: hidden; line-height: 1.3; white-space: pre; user-select: text; transform-origin: top left; caret-color: currentColor; }
+.text-editor { position: absolute; z-index: 30; min-width: 80px; min-height: 1.3em; padding: 0; border: 0; outline: 1px dashed #4a9672; outline-offset: 4px; border-radius: 1px; background: rgba(255,255,255,.04); resize: none; overflow: hidden; overflow-wrap: anywhere; line-height: 1.3; white-space: pre-wrap; user-select: text; transform-origin: top left; caret-color: currentColor; }
+.text-box-draft { fill: rgba(63,139,104,.06); stroke: #3f8b68; stroke-width: 1; stroke-dasharray: 5 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+.connector-draft { fill: none; stroke: #3f8b68; stroke-width: 2; stroke-linecap: round; vector-effect: non-scaling-stroke; pointer-events: none; }
+.connector-handles circle { fill: white; stroke: #3f8b68; stroke-width: 1.5; vector-effect: non-scaling-stroke; cursor: crosshair; pointer-events: all; filter: drop-shadow(0 1px 2px rgba(30,60,43,.18)); }
+.connector-handles circle:hover { fill: #dff1e7; }
+.tool-select .element-hit-target { cursor: move; }
+.eraser-preview { fill: rgba(255,255,255,.5); stroke: #6f7771; stroke-width: 1; stroke-dasharray: 3 2; vector-effect: non-scaling-stroke; pointer-events: none; }
 .canvas-swatch { border-radius: 6px; }
 .hint { position: absolute; z-index: 12; left: 78px; bottom: 20px; padding: 7px 10px; border-radius: 8px; background: rgba(36,42,38,.82); color: white; font-size: 11px; pointer-events: none; }
 kbd { font-family: inherit; font-size: .9em; padding: 1px 4px; border-radius: 4px; background: rgba(255,255,255,.18); }

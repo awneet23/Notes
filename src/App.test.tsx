@@ -217,7 +217,20 @@ describe('Stillboard core interactions', () => {
     expect(screen.getByRole('button', { name: 'Database icon' })).toBeTruthy()
   })
 
-  it('changes the canvas background without showing a text-entry box', async () => {
+  it('switches tools and opens the shape library with keyboard shortcuts', async () => {
+    render(<App />)
+    await screen.findByLabelText('Infinite whiteboard canvas')
+    fireEvent.keyDown(window, { key: 'a', code: 'KeyA' })
+    expect(screen.getByRole('button', { name: 'Arrow tool' }).className).toContain('active')
+    fireEvent.keyDown(window, { key: 't', code: 'KeyT' })
+    expect(screen.getByRole('button', { name: 'Text tool' }).className).toContain('active')
+    fireEvent.keyDown(window, { key: 'v', code: 'KeyV' })
+    expect(screen.getByRole('button', { name: 'Select tool' }).className).toContain('active')
+    fireEvent.keyDown(window, { key: 's', code: 'KeyS' })
+    expect(await screen.findByRole('dialog', { name: 'Shape and icon library' })).toBeTruthy()
+  })
+
+  it('changes the canvas background and opens a bounded text editor', async () => {
     render(<App />)
     const canvas = await screen.findByLabelText('Infinite whiteboard canvas')
     fireEvent.click(screen.getByRole('button', { name: 'Canvas settings' }))
@@ -231,9 +244,9 @@ describe('Stillboard core interactions', () => {
     const editor = await screen.findByLabelText('Canvas text editor')
     expect(editor.getAttribute('placeholder')).toBeNull()
     expect(editor.className).toBe('text-editor')
+    expect(editor.getAttribute('wrap')).toBe('soft')
     const editorStyle = getComputedStyle(editor)
     expect(editorStyle.borderTopStyle).toBe('none')
-    expect(editorStyle.backgroundColor).toBe('rgba(0, 0, 0, 0)')
     expect(editorStyle.resize).toBe('none')
     await waitFor(() => expect(vi.mocked(saveDocument).mock.calls.some(([doc]) => doc.background === '#e5eff9' && doc.canvasPattern === 'grid')).toBe(true), { timeout: 1500 })
   })
@@ -276,18 +289,81 @@ describe('Stillboard core interactions', () => {
 
     fireEvent.change(editor, { target: { value: 'what is up new world' } })
     fireEvent.pointerDown(canvas, { button: 0, pointerId: 15, clientX: 600, clientY: 360 })
-    const continuedText = await screen.findByText('what is up new world')
-    expect(screen.queryByText('new world')).toBeNull()
+    const continuedText = await screen.findByLabelText('what is up new world')
+    expect(canvas.querySelectorAll('[data-element-type="text"]')).toHaveLength(1)
     fireEvent.keyDown(screen.getByLabelText('Canvas text editor'), { key: 'Escape', code: 'Escape' })
 
     fireEvent.pointerDown(continuedText, { button: 0, pointerId: 16, clientX: 370, clientY: 130 })
     editor = await screen.findByLabelText('Canvas text editor') as HTMLTextAreaElement
     fireEvent.change(editor, { target: { value: '' } })
     fireEvent.pointerDown(canvas, { button: 0, pointerId: 17, clientX: 650, clientY: 400 })
-    expect(screen.queryByText('what is up new world')).toBeNull()
+    expect(screen.queryByLabelText('what is up new world')).toBeNull()
     fireEvent.keyDown(screen.getByLabelText('Canvas text editor'), { key: 'Escape', code: 'Escape' })
 
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
-    await screen.findByText('what is up new world')
+    await screen.findByLabelText('what is up new world')
+  })
+
+  it('erases only the touched section of a freehand stroke and restores it with undo', async () => {
+    render(<App />)
+    const canvas = await screen.findByLabelText('Infinite whiteboard canvas')
+    fireEvent.click(screen.getByRole('button', { name: 'Pen tool' }))
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 41, clientX: 100, clientY: 180 })
+    for (let x = 110; x <= 300; x += 10) fireEvent.pointerMove(canvas, { buttons: 1, pointerId: 41, clientX: x, clientY: 180 })
+    fireEvent.pointerUp(canvas, { button: 0, pointerId: 41, clientX: 300, clientY: 180 })
+    expect(canvas.querySelectorAll('[data-element-type="pen"]')).toHaveLength(1)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Eraser tool' }))
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 42, clientX: 200, clientY: 180 })
+    fireEvent.pointerUp(canvas, { button: 0, pointerId: 42, clientX: 200, clientY: 180 })
+    await waitFor(() => expect(canvas.querySelectorAll('[data-element-type="pen"]')).toHaveLength(2))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(canvas.querySelectorAll('[data-element-type="pen"]')).toHaveLength(1))
+  })
+
+  it('creates a wrapping text area by dragging', async () => {
+    render(<App />)
+    const canvas = await screen.findByLabelText('Infinite whiteboard canvas')
+    fireEvent.click(screen.getByRole('button', { name: 'Text tool' }))
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 43, clientX: 100, clientY: 100 })
+    fireEvent.pointerMove(canvas, { buttons: 1, pointerId: 43, clientX: 220, clientY: 160 })
+    fireEvent.pointerUp(canvas, { button: 0, pointerId: 43, clientX: 220, clientY: 160 })
+    const editor = await screen.findByLabelText('Canvas text editor') as HTMLTextAreaElement
+    expect(editor.style.width).toBe('120px')
+    fireEvent.change(editor, { target: { value: 'alpha beta gamma delta' } })
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 44, clientX: 500, clientY: 300 })
+    const text = await screen.findByLabelText('alpha beta gamma delta')
+    expect(text.querySelectorAll('tspan').length).toBeGreaterThan(1)
+  })
+
+  it('offers connector bubbles and creates an attached arrow between shapes', async () => {
+    render(<App />)
+    const canvas = await screen.findByLabelText('Infinite whiteboard canvas')
+    await chooseLibraryItem('Rectangle shape')
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 45, clientX: 100, clientY: 100 })
+    fireEvent.pointerMove(canvas, { buttons: 1, pointerId: 45, clientX: 200, clientY: 180 })
+    fireEvent.pointerUp(canvas, { button: 0, pointerId: 45, clientX: 200, clientY: 180 })
+    await chooseLibraryItem('Rectangle shape')
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 46, clientX: 320, clientY: 100 })
+    fireEvent.pointerMove(canvas, { buttons: 1, pointerId: 46, clientX: 420, clientY: 180 })
+    fireEvent.pointerUp(canvas, { button: 0, pointerId: 46, clientX: 420, clientY: 180 })
+
+    const first = canvas.querySelectorAll('[data-element-type="rectangle"]')[0]
+    fireEvent.pointerDown(first, { button: 0, pointerId: 47, clientX: 150, clientY: 140 })
+    fireEvent.pointerUp(canvas, { button: 0, pointerId: 47, clientX: 150, clientY: 140 })
+    const handle = await screen.findByLabelText('Connect from right')
+    fireEvent.pointerDown(handle, { button: 0, pointerId: 48, clientX: 200, clientY: 140 })
+    fireEvent.pointerMove(canvas, { buttons: 1, pointerId: 48, clientX: 350, clientY: 140 })
+    fireEvent.pointerUp(canvas, { button: 0, pointerId: 48, clientX: 350, clientY: 140 })
+    expect(canvas.querySelectorAll('[data-element-type="arrow"]')).toHaveLength(1)
+    expect(canvas.querySelector('[data-element-type="arrow"] .element-hit-target')?.getAttribute('stroke-width')).toBe('18')
+
+    const arrowBefore = canvas.querySelector('[data-element-type="arrow"]')?.getAttribute('transform')
+    const second = canvas.querySelectorAll('[data-element-type="rectangle"]')[1]
+    fireEvent.pointerDown(second, { button: 0, pointerId: 49, clientX: 350, clientY: 140 })
+    fireEvent.pointerMove(canvas, { buttons: 1, pointerId: 49, clientX: 450, clientY: 140 })
+    fireEvent.pointerUp(canvas, { button: 0, pointerId: 49, clientX: 450, clientY: 140 })
+    expect(canvas.querySelector('[data-element-type="arrow"]')?.getAttribute('transform')).not.toBe(arrowBefore)
   })
 })

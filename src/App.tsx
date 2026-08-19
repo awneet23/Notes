@@ -4,9 +4,9 @@ import {
   FileJson, Flag, Focus, FolderOpen, Hand, Heart, Hexagon, House, Italic, Lightbulb, Menu, MessageSquare, MousePointer2, Pencil, Pentagon, Plus, Redo2,
   PaintBucket, Palette, Save, Shapes, Slash, Square, Star, Trash2, Triangle, Type, Undo2, UserRound, X, ZoomIn, ZoomOut,
 } from 'lucide-react'
-import type { BoardDocument, BoardElement, CanvasPattern, NoteMeta, Point, Tool, ViewState } from './types'
+import type { BoardDocument, BoardElement, CanvasPattern, ConnectionSide, NoteMeta, Point, Tool, ViewState } from './types'
 import { DEFAULT_BACKGROUND, DEFAULT_CANVAS_PATTERN, DEFAULT_VIEW, newDocument, uid } from './types'
-import { boundsOf, normalizedBox, pointsToElement, recognizeStroke, smoothPath } from './geometry'
+import { boundsOf, erasePenPoints, normalizedBox, pointsToElement, recognizeStroke, smoothPath, wrapText } from './geometry'
 import { deleteDocument, getDocument, listDocuments, saveDocument } from './db'
 import { exportPng, exportProject, exportSvg } from './export'
 import { extendedShapePath, ICON_PATHS, type ExtendedShape } from './vectorLibrary'
@@ -41,28 +41,61 @@ const ICON_ITEMS: { name: string; label: string; icon: typeof Check }[] = [
   { name: 'database', label: 'Database', icon: Database }, { name: 'flag', label: 'Flag', icon: Flag },
 ]
 const LIBRARY_TOOLS: Tool[] = [...SHAPE_ITEMS.map(item => item.tool), 'icon']
+const CONNECTABLE_TYPES = new Set<BoardElement['type']>(['rectangle', 'ellipse', 'diamond', 'triangle', 'pentagon', 'hexagon', 'star', 'cloud', 'cylinder', 'speech', 'icon'])
 type StyleMenu = 'canvas' | 'stroke' | 'fill' | 'width' | null
 
 type Interaction =
   | { type: 'pan'; start: Point; view: ViewState }
   | { type: 'draw'; points: Point[] }
+  | { type: 'text-box'; start: Point; current: Point }
   | { type: 'shape'; start: Point; current: Point; tool: Tool }
+  | { type: 'connector'; start: Point; current: Point; startId: string; startSide: ConnectionSide }
   | { type: 'move'; start: Point; initial: BoardElement[]; ids: string[] }
   | { type: 'marquee'; start: Point; current: Point }
   | { type: 'resize'; start: Point; initial: BoardElement[]; ids: string[]; bounds: { x: number; y: number; width: number; height: number }; corner: string }
   | { type: 'rotate'; center: Point; startAngle: number; initial: BoardElement[]; ids: string[] }
   | null
 
-type TextEdit = { id?: string; x: number; y: number; value: string; caret?: number }
+type TextEdit = { id?: string; x: number; y: number; width: number; value: string; caret?: number }
 
 const cloneElements = (els: BoardElement[]) => els.map(el => ({ ...el, points: el.points?.map(p => ({ ...p })) }))
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform)
 const midpoint = (a: Point, b: Point): Point => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 })
 const pointDistance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y)
-const textDimensions = (value: string, size: number) => {
-  const lines = value.split('\n')
+const textDimensions = (value: string, size: number, width?: number) => {
+  const lines = width ? wrapText(value, width, size) : value.split('\n')
   const longest = Math.max(0, ...lines.map(line => line.length))
-  return { width: Math.max(3, longest * size * .62 + 2), height: Math.max(size * 1.3, lines.length * size * 1.3) }
+  return { width: width ?? Math.max(3, longest * size * .62 + 2), height: Math.max(size * 1.3, lines.length * size * 1.3), lines }
+}
+
+const connectionPoint = (el: BoardElement, side: ConnectionSide): Point => {
+  const local = side === 'top' ? { x: el.width / 2, y: 0 }
+    : side === 'right' ? { x: el.width, y: el.height / 2 }
+      : side === 'bottom' ? { x: el.width / 2, y: el.height }
+        : { x: 0, y: el.height / 2 }
+  const center = { x: el.width / 2, y: el.height / 2 }
+  const angle = el.rotation * Math.PI / 180
+  const dx = local.x - center.x, dy = local.y - center.y
+  return { x: el.x + center.x + dx * Math.cos(angle) - dy * Math.sin(angle), y: el.y + center.y + dx * Math.sin(angle) + dy * Math.cos(angle) }
+}
+
+const nearestConnectionSide = (el: BoardElement, point: Point): ConnectionSide => {
+  const sides: ConnectionSide[] = ['top', 'right', 'bottom', 'left']
+  return sides.reduce((best, side) => pointDistance(connectionPoint(el, side), point) < pointDistance(connectionPoint(el, best), point) ? side : best, 'top')
+}
+
+const syncBoundConnectors = (items: BoardElement[]): BoardElement[] => {
+  const byId = new Map(items.map(item => [item.id, item]))
+  return items.map(item => {
+    if ((item.type !== 'line' && item.type !== 'arrow') || (!item.startBinding && !item.endBinding)) return item
+    const currentStart = { x: item.x + (item.flipX ? item.width : 0), y: item.y + (item.flipY ? item.height : 0) }
+    const currentEnd = { x: item.x + (item.flipX ? 0 : item.width), y: item.y + (item.flipY ? 0 : item.height) }
+    const startTarget = item.startBinding ? byId.get(item.startBinding.elementId) : undefined
+    const endTarget = item.endBinding ? byId.get(item.endBinding.elementId) : undefined
+    const start = startTarget && item.startBinding ? connectionPoint(startTarget, item.startBinding.side) : currentStart
+    const end = endTarget && item.endBinding ? connectionPoint(endTarget, item.endBinding.side) : currentEnd
+    return { ...item, ...normalizedBox(start, end) }
+  })
 }
 
 const isDarkColor = (color: string) => {
@@ -120,6 +153,7 @@ function App() {
   const [italic, setItalic] = useState(false)
   const [align, setAlign] = useState<'left' | 'center' | 'right'>('left')
   const [textEdit, setTextEdit] = useState<TextEdit | null>(null)
+  const [eraserPoint, setEraserPoint] = useState<Point | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [spaceDown, setSpaceDown] = useState(false)
   const svgRef = useRef<SVGSVGElement>(null)
@@ -204,7 +238,7 @@ function App() {
 
   const deleteSelection = useCallback(() => {
     if (!selected.length) return
-    commit(prev => prev.filter(el => !selected.includes(el.id))); setSelected([])
+    commit(prev => prev.filter(el => !selected.includes(el.id) && !selected.includes(el.startBinding?.elementId ?? '') && !selected.includes(el.endBinding?.elementId ?? ''))); setSelected([])
   }, [selected, commit])
 
   const worldPoint = useCallback((clientX: number, clientY: number): Point => {
@@ -221,27 +255,27 @@ function App() {
     }
   }, [stroke, fill, strokeWidth, selectedIcon])
 
-  const beginText = useCallback((p: Point, el?: BoardElement, caret?: number) => {
+  const beginText = useCallback((p: Point, el?: BoardElement, caret?: number, width = 240) => {
     if (el) {
       setFontSize(el.fontSize ?? 22); setFontFamily(el.fontFamily ?? fontFamily); setBold(Boolean(el.bold)); setItalic(Boolean(el.italic)); setAlign(el.align ?? 'left'); setStroke(el.stroke)
-      setTextEdit({ id: el.id, x: el.x, y: el.y, value: el.text ?? '', caret }); setSelected([el.id])
-    } else { setTextEdit({ x: p.x, y: p.y, value: '' }); setSelected([]) }
+      setTextEdit({ id: el.id, x: el.x, y: el.y, width: Math.max(80, el.width), value: el.text ?? '', caret }); setSelected([el.id])
+    } else { setTextEdit({ x: p.x, y: p.y, width: Math.max(80, width), value: '' }); setSelected([]) }
   }, [fontFamily])
 
   const finishText = useCallback(() => {
     if (!textEdit) return
     const value = textEdit.value.trimEnd()
-    const dimensions = textDimensions(value, fontSize)
+    const dimensions = textDimensions(value, fontSize, textEdit.width)
     if (textEdit.id) {
       const original = elements.find(el => el.id === textEdit.id)
       if (original && !value) {
         commit(prev => prev.filter(el => el.id !== textEdit.id))
         setSelected([])
-      } else if (original && value !== original.text) {
-        commit(prev => prev.map(el => el.id === textEdit.id ? { ...el, text: value, width: dimensions.width, height: dimensions.height, fontSize, fontFamily, bold, italic, align, stroke } : el))
+      } else if (original && (value !== original.text || !original.textBox)) {
+        commit(prev => prev.map(el => el.id === textEdit.id ? { ...el, text: value, textBox: true, width: textEdit.width, height: dimensions.height, fontSize, fontFamily, bold, italic, align, stroke } : el))
       }
     } else if (value) {
-      const el: BoardElement = { id: uid(), type: 'text', x: textEdit.x, y: textEdit.y, width: dimensions.width, height: dimensions.height, rotation: 0, stroke, fill: 'transparent', strokeWidth: 1, opacity: 1, text: value, fontSize, fontFamily, bold, italic, align }
+      const el: BoardElement = { id: uid(), type: 'text', x: textEdit.x, y: textEdit.y, width: textEdit.width, height: dimensions.height, rotation: 0, stroke, fill: 'transparent', strokeWidth: 1, opacity: 1, text: value, textBox: true, fontSize, fontFamily, bold, italic, align }
       commit(prev => [...prev, el]); setSelected([el.id])
     }
     // Keep the currently chosen tool active. When Text opened this editor it
@@ -263,6 +297,27 @@ function App() {
   }, [textEdit?.id, textEdit?.x, textEdit?.y, textEdit?.caret])
 
   const setInteractionBoth = (next: Interaction) => { interactionRef.current = next; setInteraction(next) }
+
+  const eraseAt = (point: Point, hitId?: string) => {
+    const radius = 12 / view.zoom
+    setElements(previous => {
+      let changed = false
+      const next = previous.flatMap(element => {
+        if (element.type !== 'pen') {
+          if (element.id === hitId) { changed = true; return [] }
+          return [element]
+        }
+        const runs = erasePenPoints(element, point, radius + element.strokeWidth / 2)
+        if (!runs) return [element]
+        changed = true
+        return runs.map((points, index) => pointsToElement(points, {
+          id: index === 0 ? element.id : uid(), type: 'pen', rotation: 0, stroke: element.stroke,
+          fill: 'transparent', strokeWidth: element.strokeWidth, opacity: element.opacity,
+        }))
+      })
+      return changed ? next : previous
+    })
+  }
 
   const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
     if (e.button === 2) return
@@ -295,14 +350,14 @@ function App() {
     const hitElement = elements.find(el => el.id === hitId)
     const p = worldPoint(e.clientX, e.clientY)
     if (tool === 'text') {
-      // Prevent the canvas pointer-down default from stealing focus after the
-      // editor mounts. Text interactions do not need pointer capture.
       e.preventDefault()
-      // A second canvas click commits the current text before opening the next
-      // editor, so sticky Text mode can be used for several labels in a row.
       if (textEdit) finishText()
-      if (hitElement?.type === 'text') beginText(p, hitElement, textCaretFromPoint(hitElement, p))
-      else beginText(p)
+      if (hitElement?.type === 'text') beginText(p, hitElement, hitElement.textBox ? undefined : textCaretFromPoint(hitElement, p))
+      else {
+        svgRef.current?.setPointerCapture(e.pointerId)
+        beginText(p, undefined, undefined, 240)
+        setInteractionBoth({ type: 'text-box', start: p, current: p })
+      }
       return
     }
     if (e.pointerType !== 'touch') svgRef.current?.setPointerCapture(e.pointerId)
@@ -310,10 +365,10 @@ function App() {
       setInteractionBoth({ type: 'pan', start: { x: e.clientX, y: e.clientY }, view: { ...view } }); return
     }
     if (tool === 'eraser') {
-      // Start one undoable eraser gesture even when the drag begins in empty
-      // space and only reaches an element later.
       pushHistory()
-      if (hitId) { setElements(prev => prev.filter(el => el.id !== hitId)); setSelected(prev => prev.filter(id => id !== hitId)) }
+      setEraserPoint(p)
+      eraseAt(p, hitId)
+      setSelected([])
       return
     }
     if (tool === 'pen') { setInteractionBoth({ type: 'draw', points: [p] }); return }
@@ -348,11 +403,12 @@ function App() {
         return
       }
     }
+    if (tool === 'eraser') setEraserPoint(worldPoint(e.clientX, e.clientY))
     const active = interactionRef.current
     if (!active) {
       if (tool === 'eraser' && e.buttons === 1) {
         const under = document.elementFromPoint(e.clientX, e.clientY)?.closest?.('[data-element-id]') as SVGElement | null
-        if (under?.dataset.elementId) setElements(prev => prev.filter(el => el.id !== under.dataset.elementId))
+        eraseAt(worldPoint(e.clientX, e.clientY), under?.dataset.elementId)
       }
       return
     }
@@ -365,11 +421,16 @@ function App() {
       if (Math.hypot(p.x - last.x, p.y - last.y) > .8 / view.zoom) {
         active.points.push(p); setInteraction({ ...active, points: [...active.points] })
       }
-    } else if (active.type === 'shape' || active.type === 'marquee') {
-      active.current = p; setInteraction({ ...active })
+    } else if (active.type === 'shape' || active.type === 'marquee' || active.type === 'text-box' || active.type === 'connector') {
+      active.current = p
+      if (active.type === 'text-box' && pointDistance(active.start, p) >= 8 / view.zoom) {
+        const box = normalizedBox(active.start, p)
+        setTextEdit(current => current && !current.id ? { ...current, x: box.x, y: box.y, width: Math.max(80, box.width) } : current)
+      }
+      setInteraction({ ...active })
     } else if (active.type === 'move') {
       const dx = p.x - active.start.x, dy = p.y - active.start.y
-      setElements(active.initial.map(el => active.ids.includes(el.id) ? { ...el, x: el.x + dx, y: el.y + dy } : el))
+      setElements(syncBoundConnectors(active.initial.map(el => active.ids.includes(el.id) ? { ...el, x: el.x + dx, y: el.y + dy } : el)))
     } else if (active.type === 'resize') {
       const b = active.bounds
       const left = active.corner.includes('w') ? Math.min(p.x, b.x + b.width - 5) : b.x
@@ -377,26 +438,26 @@ function App() {
       const right = active.corner.includes('e') ? Math.max(p.x, b.x + 5) : b.x + b.width
       const bottom = active.corner.includes('s') ? Math.max(p.y, b.y + 5) : b.y + b.height
       const sx = (right - left) / Math.max(b.width, 1), sy = (bottom - top) / Math.max(b.height, 1)
-      setElements(active.initial.map(el => active.ids.includes(el.id) ? {
+      setElements(syncBoundConnectors(active.initial.map(el => active.ids.includes(el.id) ? {
         ...el,
         x: left + (el.x - b.x) * sx,
         y: top + (el.y - b.y) * sy,
         width: Math.max(5, el.width * sx),
         height: Math.max(5, el.height * sy),
         ...(el.type === 'text' ? { fontSize: Math.max(8, (el.fontSize ?? 22) * sy) } : {}),
-      } : el))
+      } : el)))
     } else if (active.type === 'rotate') {
       const angle = Math.atan2(p.y - active.center.y, p.x - active.center.x) * 180 / Math.PI
       const delta = angle - active.startAngle
       const rad = delta * Math.PI / 180
-      setElements(active.initial.map(el => {
+      setElements(syncBoundConnectors(active.initial.map(el => {
         if (!active.ids.includes(el.id)) return el
         const cx = el.x + el.width / 2, cy = el.y + el.height / 2
         const dx = cx - active.center.x, dy = cy - active.center.y
         const nx = active.center.x + dx * Math.cos(rad) - dy * Math.sin(rad)
         const ny = active.center.y + dx * Math.sin(rad) + dy * Math.cos(rad)
         return { ...el, x: nx - el.width / 2, y: ny - el.height / 2, rotation: el.rotation + delta }
-      }))
+      })))
     }
   }
 
@@ -425,6 +486,21 @@ function App() {
         const el = pointsToElement(active.points, { id: uid(), type: 'pen', rotation: 0, stroke, fill: 'transparent', strokeWidth, opacity: 1 })
         commit(prev => [...prev, el]); setSelected([el.id])
       }
+    } else if (active.type === 'text-box') {
+      // The editor starts on pointer-down so mobile keyboards can open from
+      // the trusted tap. Dragging updates its width before pointer-up.
+    } else if (active.type === 'connector') {
+      const target = [...elements].reverse().find(element => element.id !== active.startId && CONNECTABLE_TYPES.has(element.type)
+        && active.current.x >= element.x - 16 / view.zoom && active.current.x <= element.x + element.width + 16 / view.zoom
+        && active.current.y >= element.y - 16 / view.zoom && active.current.y <= element.y + element.height + 16 / view.zoom)
+      const endSide = target ? nearestConnectionSide(target, active.current) : undefined
+      const end = target && endSide ? connectionPoint(target, endSide) : active.current
+      if (pointDistance(active.start, end) > 8 / view.zoom) {
+        const connector = makeShape('arrow', active.start, end, false)
+        connector.startBinding = { elementId: active.startId, side: active.startSide }
+        if (target && endSide) connector.endBinding = { elementId: target.id, side: endSide }
+        commit(prev => [...prev, connector]); setSelected([connector.id])
+      }
     } else if (active.type === 'shape') {
       const distance = Math.hypot(active.current.x - active.start.x, active.current.y - active.start.y)
       const current = distance < 4 / view.zoom ? { x: active.start.x + (active.tool === 'icon' ? 64 : 100), y: active.start.y + (active.tool === 'icon' ? 64 : 70) } : active.current
@@ -447,6 +523,13 @@ function App() {
     e.stopPropagation(); const b = boundsOf(elements.filter(el => selected.includes(el.id))); if (!b) return
     const center = { x: b.x + b.width / 2, y: b.y + b.height / 2 }, p = worldPoint(e.clientX, e.clientY)
     pushHistory(); setInteractionBoth({ type: 'rotate', center, startAngle: Math.atan2(p.y - center.y, p.x - center.x) * 180 / Math.PI, initial: cloneElements(elements), ids: [...selected] }); svgRef.current?.setPointerCapture(e.pointerId)
+  }
+
+  const beginConnector = (e: React.PointerEvent, element: BoardElement, side: ConnectionSide) => {
+    e.stopPropagation(); e.preventDefault()
+    const start = connectionPoint(element, side)
+    setInteractionBoth({ type: 'connector', start, current: start, startId: element.id, startSide: side })
+    svgRef.current?.setPointerCapture(e.pointerId)
   }
 
   const zoomAt = useCallback((nextZoom: number, client?: Point) => {
@@ -526,6 +609,7 @@ function App() {
       if (e.key === 'Escape') { setSelected([]); setTextEdit(null); setLibraryOpen(false); setStyleMenu(null); setInteractionBoth(null); return }
       const found = TOOL_ITEMS.find(item => item.key.toLowerCase() === e.key.toLowerCase())
       const shapeShortcut = ({ r: 'rectangle', o: 'ellipse', d: 'diamond' } as Record<string, Tool>)[e.key.toLowerCase()]
+      if (e.key.toLowerCase() === 's' && !e.ctrlKey && !e.metaKey) { setLibraryOpen(true); setStyleMenu(null); return }
       if (found && !e.ctrlKey && !e.metaKey) { setTool(found.tool); setLibraryOpen(false) }
       else if (shapeShortcut && !e.ctrlKey && !e.metaKey) { setTool(shapeShortcut); setLibraryOpen(false) }
       if ((e.key === '+' || e.key === '=') && !e.ctrlKey) zoomAt(view.zoom * 1.15)
@@ -539,7 +623,7 @@ function App() {
   const selectedElements = useMemo(() => elements.filter(el => selected.includes(el.id)), [elements, selected])
   const selectionBounds = useMemo(() => boundsOf(selectedElements), [selectedElements])
   const draftShape = interaction?.type === 'shape' ? makeShape(interaction.tool, interaction.start, interaction.current, false) : null
-  const editorDimensions = textEdit ? textDimensions(textEdit.value, fontSize) : null
+  const editorDimensions = textEdit ? textDimensions(textEdit.value, fontSize, textEdit.width) : null
   const darkCanvas = isDarkColor(background)
   const gridColor = darkCanvas ? '#59645f' : '#d3d4ce'
   const paperSize = (canvasPattern === 'dots' ? 24 : 32) * view.zoom
@@ -585,9 +669,9 @@ function App() {
 
       <nav className="toolbar" aria-label="Drawing tools">
         {TOOL_ITEMS.map(({ tool: item, label, key, icon: Icon }, index) => <div key={item} className={index === 4 || index === 5 ? 'tool-divider-before' : ''}>
-          <button className={tool === item ? 'active' : ''} onClick={() => { setTool(item); setLibraryOpen(false); setStyleMenu(null); if (item !== 'select') setSelected([]) }} aria-label={`${label} tool`} title={`${label} (${key})`}><Icon size={19}/><kbd>{key}</kbd></button>
+          <button className={tool === item ? 'active' : ''} onClick={() => { setTool(item); setLibraryOpen(false); setStyleMenu(null); if (item !== 'select') setSelected([]) }} aria-label={`${label} tool`} aria-keyshortcuts={key} title={`${label} (${key})`}><Icon size={19}/><kbd>{key}</kbd></button>
         </div>)}
-        <div className="tool-divider-before library-tool"><button className={LIBRARY_TOOLS.includes(tool) ? 'active' : ''} onClick={() => { setLibraryOpen(open => !open); setStyleMenu(null) }} aria-label="Shapes and icons" title="Shapes and icons (R / O / D)"><Shapes size={20}/><ChevronDown className="tool-chevron" size={10}/></button></div>
+        <div className="tool-divider-before library-tool"><button className={LIBRARY_TOOLS.includes(tool) ? 'active' : ''} onClick={() => { setLibraryOpen(open => !open); setStyleMenu(null) }} aria-label="Shapes and icons" aria-keyshortcuts="S" title="Shapes and icons (S / R / O / D)"><Shapes size={20}/><ChevronDown className="tool-chevron" size={10}/></button></div>
       </nav>
 
       {libraryOpen && <div className="popover shape-library" role="dialog" aria-label="Shape and icon library">
@@ -596,9 +680,9 @@ function App() {
       </div>}
 
       <section className="canvas-wrap">
-        <svg ref={svgRef} className="canvas" aria-label="Infinite whiteboard canvas" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onWheel={onWheel} onDoubleClick={e => {
+        <svg ref={svgRef} className="canvas" aria-label="Infinite whiteboard canvas" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onPointerLeave={() => setEraserPoint(null)} onWheel={onWheel} onDoubleClick={e => {
           const id = ((e.target as Element).closest?.('[data-element-id]') as SVGElement | null)?.dataset.elementId
-          const el = elements.find(item => item.id === id); if (el?.type === 'text') { e.stopPropagation(); const p = worldPoint(e.clientX, e.clientY); beginText(p, el, textCaretFromPoint(el, p)) }
+          const el = elements.find(item => item.id === id); if (el?.type === 'text') { e.stopPropagation(); const p = worldPoint(e.clientX, e.clientY); beginText(p, el, el.textBox ? undefined : textCaretFromPoint(el, p)) }
         }}>
           <defs>
             {canvasPattern !== 'plain' && <pattern id="canvas-paper" width={paperSize} height={paperSize} patternUnits="userSpaceOnUse" x={view.x % paperSize} y={view.y % paperSize}>
@@ -614,12 +698,16 @@ function App() {
             {elements.map(el => el.id === textEdit?.id ? null : <ElementView key={el.id} el={el} selected={selected.includes(el.id)}/>) }
             {interaction?.type === 'draw' && <path d={smoothPath(interaction.points)} fill="none" stroke={stroke} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke"/>}
             {draftShape && <ElementView el={draftShape} selected={false} draft/>}
+            {interaction?.type === 'text-box' && (() => { const b = normalizedBox(interaction.start, interaction.current); return <rect x={b.x} y={b.y} width={Math.max(b.width, 1)} height={Math.max(b.height, fontSize * 1.3)} className="text-box-draft"/> })()}
+            {interaction?.type === 'connector' && <line x1={interaction.start.x} y1={interaction.start.y} x2={interaction.current.x} y2={interaction.current.y} className="connector-draft" markerEnd="url(#arrowhead)"/>}
+            {tool === 'eraser' && eraserPoint && <circle className="eraser-preview" cx={eraserPoint.x} cy={eraserPoint.y} r={12 / view.zoom}/>} 
             {interaction?.type === 'marquee' && (() => { const b = normalizedBox(interaction.start, interaction.current); return <rect x={b.x} y={b.y} width={b.width} height={b.height} className="marquee"/> })()}
             {selectionBounds && !textEdit && <SelectionBox bounds={selectionBounds} zoom={view.zoom} onResize={beginResize} onRotate={beginRotate}/>} 
+            {tool === 'select' && selectedElements.length === 1 && CONNECTABLE_TYPES.has(selectedElements[0].type) && !textEdit && <ConnectionHandles element={selectedElements[0]} zoom={view.zoom} onStart={beginConnector}/>} 
           </g>
         </svg>
 
-        {textEdit && editorDimensions && <textarea ref={textAreaRef} aria-label="Canvas text editor" wrap="off" className="text-editor" value={textEdit.value} onChange={e => setTextEdit({ ...textEdit, value: e.target.value })} onBlur={finishText} onKeyDown={e => { e.stopPropagation(); if (e.key === 'Escape') { e.preventDefault(); setTextEdit(null) } if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); finishText() } }} onKeyUp={e => e.stopPropagation()} style={{ left: textEdit.x * view.zoom + view.x, top: textEdit.y * view.zoom + view.y, width: editorDimensions.width * view.zoom, height: editorDimensions.height * view.zoom, fontSize: fontSize * view.zoom, fontFamily, fontWeight: bold ? 700 : 400, fontStyle: italic ? 'italic' : 'normal', textAlign: align, color: stroke }}/>} 
+        {textEdit && editorDimensions && <textarea ref={textAreaRef} aria-label="Canvas text editor" wrap="soft" className="text-editor" value={textEdit.value} onChange={e => setTextEdit({ ...textEdit, value: e.target.value })} onBlur={finishText} onKeyDown={e => { e.stopPropagation(); if (e.key === 'Escape') { e.preventDefault(); setTextEdit(null) } if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); finishText() } }} onKeyUp={e => e.stopPropagation()} style={{ left: textEdit.x * view.zoom + view.x, top: textEdit.y * view.zoom + view.y, width: editorDimensions.width * view.zoom, height: editorDimensions.height * view.zoom, fontSize: fontSize * view.zoom, fontFamily, fontWeight: bold ? 700 : 400, fontStyle: italic ? 'italic' : 'normal', textAlign: align, color: stroke }}/>} 
       </section>
 
       <div className="zoom-controls"><button onClick={() => zoomAt(view.zoom / 1.2)} aria-label="Zoom out"><ZoomOut size={17}/></button><button className="zoom-readout" onClick={() => zoomAt(1)}>{Math.round(view.zoom * 100)}%</button><button onClick={() => zoomAt(view.zoom * 1.2)} aria-label="Zoom in"><ZoomIn size={17}/></button><span/><button onClick={fitCanvas} aria-label="Fit canvas" title="Fit canvas"><Focus size={17}/></button></div>
@@ -656,7 +744,7 @@ function App() {
         {selected.length > 0 && <button className="delete-button" onClick={deleteSelection}><Trash2 size={16}/> Delete</button>}
       </div>
 
-      {tool === 'pen' && <div className="hint">Hold <kbd>Shift</kbd> as you release to tidy a rough line, circle, or rectangle</div>}
+      {tool === 'pen' && <div className="hint">Hold <kbd>Shift</kbd> on release to tidy lines, circles, rectangles, triangles, diamonds, and stars</div>}
       {toast && <div className="toast"><Check size={17}/>{toast}</div>}
     </main>
   )
@@ -665,13 +753,14 @@ function App() {
 function ElementView({ el, selected, draft = false }: { el: BoardElement; selected: boolean; draft?: boolean }) {
   const transform = `translate(${el.x} ${el.y}) rotate(${el.rotation} ${el.width / 2} ${el.height / 2})`
   const common = { stroke: el.stroke, fill: el.fill, strokeWidth: el.strokeWidth, opacity: draft ? .65 : el.opacity, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, vectorEffect: 'non-scaling-stroke' as const }
-  const attr = draft ? {} : { 'data-element-id': el.id, ...(el.type === 'icon' ? { 'data-icon-name': el.iconName ?? 'check' } : {}) }
+  const attr = draft ? {} : { 'data-element-id': el.id, 'data-element-type': el.type, ...(el.type === 'icon' ? { 'data-icon-name': el.iconName ?? 'check' } : {}) }
   let content
   if (el.type === 'pen') {
     const points = el.points ?? []
     const naturalWidth = Math.max(1, ...points.map(point => point.x))
     const naturalHeight = Math.max(1, ...points.map(point => point.y))
-    content = <path d={smoothPath(points)} transform={`scale(${el.width / naturalWidth} ${el.height / naturalHeight})`} {...common}/>
+    const path = smoothPath(points), pathTransform = `scale(${el.width / naturalWidth} ${el.height / naturalHeight})`
+    content = <><path className="element-hit-target" d={path} transform={pathTransform} fill="none" stroke="transparent" strokeWidth={Math.max(16, el.strokeWidth + 12)} pointerEvents="stroke" vectorEffect="non-scaling-stroke"/><path d={path} transform={pathTransform} {...common}/></>
   }
   else if (el.type === 'rectangle') content = <rect width={el.width} height={el.height} rx={8} {...common}/>
   else if (el.type === 'ellipse') content = <ellipse cx={el.width / 2} cy={el.height / 2} rx={el.width / 2} ry={el.height / 2} {...common}/>
@@ -680,10 +769,11 @@ function ElementView({ el, selected, draft = false }: { el: BoardElement; select
   else if (el.type === 'icon') content = <><rect width={el.width} height={el.height} fill="transparent" stroke="none" pointerEvents="all"/><svg width={el.width} height={el.height} viewBox="0 0 24 24" overflow="visible"><g fill="none" stroke={el.stroke} strokeWidth={el.strokeWidth} opacity={el.opacity} strokeLinecap="round" strokeLinejoin="round">{(ICON_PATHS[el.iconName ?? 'check'] ?? ICON_PATHS.check).map((path, index) => <path key={index} d={path} vectorEffect="non-scaling-stroke"/>)}</g></svg></>
   else if (el.type === 'line' || el.type === 'arrow') {
     const x1 = el.flipX ? el.width : 0, y1 = el.flipY ? el.height : 0, x2 = el.flipX ? 0 : el.width, y2 = el.flipY ? 0 : el.height
-    content = <line x1={x1} y1={y1} x2={x2} y2={y2} {...common} markerEnd={el.type === 'arrow' ? 'url(#arrowhead)' : undefined}/>
+    content = <><line className="element-hit-target" x1={x1} y1={y1} x2={x2} y2={y2} fill="none" stroke="transparent" strokeWidth={Math.max(18, el.strokeWidth + 14)} pointerEvents="stroke" vectorEffect="non-scaling-stroke"/><line x1={x1} y1={y1} x2={x2} y2={y2} {...common} markerEnd={el.type === 'arrow' ? 'url(#arrowhead)' : undefined}/></>
   } else {
     const x = el.align === 'center' ? el.width / 2 : el.align === 'right' ? el.width : 0
-    content = <><rect className="text-hit-area" width={el.width} height={el.height} fill="transparent" stroke="none" pointerEvents="all"/><text x={x} y={el.fontSize ?? 22} fill={el.stroke} stroke="none" opacity={el.opacity} textAnchor={el.align === 'center' ? 'middle' : el.align === 'right' ? 'end' : 'start'} fontFamily={el.fontFamily} fontSize={el.fontSize} fontWeight={el.bold ? 700 : 400} fontStyle={el.italic ? 'italic' : 'normal'}>{(el.text ?? '').split('\n').map((line, i) => <tspan x={x} dy={i ? '1.25em' : undefined} key={i}>{line || ' '}</tspan>)}</text></>
+    const lines = el.textBox ? wrapText(el.text ?? '', el.width, el.fontSize ?? 22) : (el.text ?? '').split('\n')
+    content = <><rect className="text-hit-area" width={el.width} height={el.height} fill="transparent" stroke="none" pointerEvents="all"/><text aria-label={el.text} x={x} y={el.fontSize ?? 22} fill={el.stroke} stroke="none" opacity={el.opacity} textAnchor={el.align === 'center' ? 'middle' : el.align === 'right' ? 'end' : 'start'} fontFamily={el.fontFamily} fontSize={el.fontSize} fontWeight={el.bold ? 700 : 400} fontStyle={el.italic ? 'italic' : 'normal'}>{lines.map((line, i) => <tspan x={x} dy={i ? '1.3em' : undefined} key={i}>{line || ' '}</tspan>)}</text></>
   }
   return <g transform={transform} {...attr} className={selected ? 'element selected-element' : 'element'}>{content}</g>
 }
@@ -692,6 +782,14 @@ function SelectionBox({ bounds: b, zoom, onResize, onRotate }: { bounds: { x: nu
   const size = 9 / zoom, half = size / 2, offset = 25 / zoom
   const corners = [{ key: 'nw', x: b.x, y: b.y }, { key: 'ne', x: b.x + b.width, y: b.y }, { key: 'sw', x: b.x, y: b.y + b.height }, { key: 'se', x: b.x + b.width, y: b.y + b.height }]
   return <g className="selection-ui"><rect x={b.x} y={b.y} width={b.width} height={b.height}/><line x1={b.x + b.width / 2} y1={b.y} x2={b.x + b.width / 2} y2={b.y - offset}/><circle className="rotate-handle" cx={b.x + b.width / 2} cy={b.y - offset} r={half + 1 / zoom} onPointerDown={onRotate}/>{corners.map(c => <rect key={c.key} className={`resize-handle ${c.key}`} x={c.x - half} y={c.y - half} width={size} height={size} rx={2 / zoom} onPointerDown={e => onResize(e, c.key)}/>)}</g>
+}
+
+function ConnectionHandles({ element, zoom, onStart }: { element: BoardElement; zoom: number; onStart: (e: React.PointerEvent, element: BoardElement, side: ConnectionSide) => void }) {
+  const sides: ConnectionSide[] = ['top', 'right', 'bottom', 'left']
+  return <g className="connector-handles">{sides.map(side => {
+    const point = connectionPoint(element, side)
+    return <circle key={side} cx={point.x} cy={point.y} r={6 / zoom} data-connector-side={side} aria-label={`Connect from ${side}`} onPointerDown={event => onStart(event, element, side)}/>
+  })}</g>
 }
 
 export default App

@@ -26,9 +26,11 @@ npm test -- --maxWorkers=1
 
 - Select: `V`; hold Shift while clicking or drag a marquee for multi-select.
 - Pan: `H`, middle mouse, or hold Space.
-- Pen: `P`; hold Shift when releasing a rough stroke to tidy it into a line, ellipse, or rectangle.
-- Text: `T`; double-click existing text to edit it.
-- Eraser: `E`; Line: `L`; Arrow: `A`. Open the compact Shapes & Icons library for diagram shapes and reusable symbol stamps. Rectangle: `R`; Ellipse: `O`; Diamond: `D`.
+- Pen: `P`; hold Shift when releasing a rough stroke to tidy it into a line, ellipse, rectangle, triangle, diamond, or star.
+- Text area: `T`; drag to set a wrapping width or tap for a default-width box. Tap existing text with the Text tool, or double-click it, to continue editing.
+- Eraser: `E`; drag across a pencil stroke to erase only the touched section. Other objects erase as a whole.
+- Line: `L`; Arrow: `A`. Press `S` to open Shapes & Icons. Rectangle: `R`; Ellipse: `O`; Diamond: `D`.
+- Connector arrows: select a shape, then drag one of its four green connection bubbles toward another shape. Attached arrows follow shape movement and resizing.
 - Undo/redo: `Ctrl/Cmd+Z` and `Ctrl/Cmd+Y`.
 - Save locally: `Ctrl/Cmd+S`.
 - Delete selection: `Delete` or `Backspace`.

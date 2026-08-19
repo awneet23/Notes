@@ -1,5 +1,5 @@
 import type { BoardDocument, BoardElement, CanvasPattern } from './types'
-import { boundsOf, smoothPath } from './geometry'
+import { boundsOf, smoothPath, wrapText } from './geometry'
 import { extendedShapePath, ICON_PATHS, type ExtendedShape } from './vectorLibrary'
 
 const esc = (s: string) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]!))
@@ -30,7 +30,8 @@ function elementSvg(el: BoardElement): string {
   if (el.type === 'text') {
     const anchor = el.align === 'center' ? 'middle' : el.align === 'right' ? 'end' : 'start'
     const tx = el.align === 'center' ? el.width / 2 : el.align === 'right' ? el.width : 0
-    const lines = (el.text ?? '').split('\n').map((line, i) => `<tspan x="${tx}" dy="${i ? 1.25 : 0}em">${esc(line || ' ')}</tspan>`).join('')
+    const textLines = el.textBox ? wrapText(el.text ?? '', el.width, el.fontSize ?? 20) : (el.text ?? '').split('\n')
+    const lines = textLines.map((line, i) => `<tspan x="${tx}" dy="${i ? 1.3 : 0}em">${esc(line || ' ')}</tspan>`).join('')
     return `<g transform="${transform}"><text x="${tx}" y="${el.fontSize ?? 20}" fill="${esc(el.stroke)}" stroke="none" opacity="${el.opacity}" text-anchor="${anchor}" font-family="${esc(el.fontFamily ?? 'Inter, sans-serif')}" font-size="${el.fontSize ?? 20}" font-weight="${el.bold ? 700 : 400}" font-style="${el.italic ? 'italic' : 'normal'}">${lines}</text></g>`
   }
   return ''

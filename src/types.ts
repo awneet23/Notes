@@ -1,6 +1,8 @@
 export type Tool = 'select' | 'hand' | 'pen' | 'eraser' | 'text' | 'line' | 'arrow' | 'rectangle' | 'ellipse' | 'diamond' | 'triangle' | 'pentagon' | 'hexagon' | 'star' | 'cloud' | 'cylinder' | 'speech' | 'icon'
 
 export type Point = { x: number; y: number }
+export type ConnectionSide = 'top' | 'right' | 'bottom' | 'left'
+export type ConnectionBinding = { elementId: string; side: ConnectionSide }
 
 export type BoardElement = {
   id: string
@@ -24,6 +26,9 @@ export type BoardElement = {
   italic?: boolean
   align?: 'left' | 'center' | 'right'
   iconName?: string
+  textBox?: boolean
+  startBinding?: ConnectionBinding
+  endBinding?: ConnectionBinding
 }
 
 export type ViewState = { x: number; y: number; zoom: number }
