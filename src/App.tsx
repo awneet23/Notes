@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import {
   ArrowRight, Bold, BoxSelect, Check, ChevronDown, Circle, Cloud, Copy, Cylinder, Database, Diamond, Download, Eraser,
   FileJson, Flag, Focus, FolderOpen, Hand, Heart, Hexagon, House, Italic, Lightbulb, Menu, MessageSquare, MousePointer2, Pencil, Pentagon, Plus, Redo2,
-  PaintBucket, Palette, Save, Shapes, Slash, Square, Star, Trash2, Triangle, Type, Undo2, UserRound, X, ZoomIn, ZoomOut,
+  KeyRound, LoaderCircle, PaintBucket, Palette, Save, Shapes, Slash, Sparkles, Square, Star, Trash2, Triangle, Type, Undo2, UserRound, X, ZoomIn, ZoomOut,
 } from 'lucide-react'
 import type { BoardDocument, BoardElement, CanvasPattern, ConnectionSide, NoteMeta, Point, Tool, ViewState } from './types'
 import { DEFAULT_BACKGROUND, DEFAULT_CANVAS_PATTERN, DEFAULT_VIEW, newDocument, uid } from './types'
@@ -10,6 +10,7 @@ import { boundsOf, erasePenPoints, normalizedBox, pointsToElement, recognizeStro
 import { deleteDocument, getDocument, listDocuments, saveDocument } from './db'
 import { exportPng, exportProject, exportSvg } from './export'
 import { extendedShapePath, ICON_PATHS, type ExtendedShape } from './vectorLibrary'
+import { diagramToElements, requestDiagram } from './ai'
 
 const COLORS = ['#1e2522', '#5f6360', '#e05252', '#e87926', '#d1a617', '#3b8b65', '#238b8e', '#3178c6', '#7357bd', '#c65b9a', '#f2f2ee']
 const FILLS = ['transparent', '#fff1a8', '#f8dfca', '#ffe4e4', '#dff3e8', '#d9f1ef', '#deecff', '#f0e6ff', '#ecefed']
@@ -140,6 +141,12 @@ function App() {
   const [notes, setNotes] = useState<NoteMeta[]>([])
   const [notesOpen, setNotesOpen] = useState(false)
   const [fileOpen, setFileOpen] = useState(false)
+  const [aiOpen, setAiOpen] = useState(false)
+  const [aiKey, setAiKey] = useState('')
+  const [aiPrompt, setAiPrompt] = useState('')
+  const [aiModel, setAiModel] = useState('gpt-5.4-mini')
+  const [aiBusy, setAiBusy] = useState(false)
+  const [aiError, setAiError] = useState<string | null>(null)
   const [libraryOpen, setLibraryOpen] = useState(false)
   const [styleMenu, setStyleMenu] = useState<StyleMenu>(null)
   const [selectedIcon, setSelectedIcon] = useState('check')
@@ -167,6 +174,7 @@ function App() {
   const saveTimerRef = useRef<number | null>(null)
   const touchPointsRef = useRef(new Map<number, Point>())
   const touchGestureRef = useRef<{ distance: number; world: Point; startView: ViewState } | null>(null)
+  const aiAbortRef = useRef<AbortController | null>(null)
 
   const showToast = useCallback((message: string) => {
     setToast(message)
@@ -590,6 +598,30 @@ function App() {
     if (importRef.current) importRef.current.value = ''
   }
 
+  const generateAiDiagram = async () => {
+    const key = aiKey.trim(), prompt = aiPrompt.trim()
+    if (key.length < 20) { setAiError('Enter your OpenAI API key.'); return }
+    if (!prompt) { setAiError('Describe the diagram you want.'); return }
+    if (aiBusy) return
+    setAiBusy(true); setAiError(null)
+    const controller = new AbortController(); aiAbortRef.current = controller
+    try {
+      const plan = await requestDiagram(key, prompt, aiModel, controller.signal)
+      const rect = svgRef.current?.getBoundingClientRect()
+      const origin = rect ? worldPoint(rect.left + Math.min(120, rect.width * .12), rect.top + Math.min(110, rect.height * .14)) : { x: 80, y: 80 }
+      const generated = diagramToElements(plan, origin)
+      if (!generated.length) throw new Error('OpenAI returned an empty diagram.')
+      if (textEdit) finishText()
+      commit(previous => [...previous, ...generated])
+      setSelected(generated.map(element => element.id)); setTool('select'); setAiOpen(false); setAiPrompt('')
+      showToast(`Created “${plan.title || 'AI diagram'}”`)
+    } catch (error) {
+      if ((error as Error).name !== 'AbortError') setAiError(error instanceof Error ? error.message : 'AI request failed.')
+    } finally {
+      aiAbortRef.current = null; setAiBusy(false)
+    }
+  }
+
   const exportElements = selected.length ? elements.filter(el => selected.includes(el.id)) : elements
 
   useEffect(() => {
@@ -634,16 +666,29 @@ function App() {
     <main className={`app tool-${tool} ${spaceDown ? 'space-pan' : ''} ${darkCanvas ? 'dark-canvas' : ''}`}>
       <header className="topbar">
         <div className="brand" aria-label="Stillboard"><span className="brand-mark">S</span><span>Stillboard</span></div>
-        <button className="board-title" onClick={() => setNotesOpen(v => !v)} aria-label="Open board switcher">
+        <button className="board-title" onClick={() => { setNotesOpen(v => !v); setAiOpen(false); setFileOpen(false) }} aria-label="Open board switcher">
           <span>{name}</span><ChevronDown size={14}/>
         </button>
         <div className={`save-status ${status}`}><span className="status-dot"/>{status === 'saved' ? 'Saved locally' : status === 'saving' ? 'Saving…' : 'Unsaved changes'}</div>
         <div className="top-actions">
           <button className="icon-button" onClick={undo} disabled={!historyRef.current.length} aria-label="Undo" title="Undo"><Undo2 size={18}/></button>
           <button className="icon-button" onClick={redo} disabled={!futureRef.current.length} aria-label="Redo" title="Redo"><Redo2 size={18}/></button>
-          <button className="file-button" onClick={() => setFileOpen(v => !v)} aria-label="File menu"><Menu size={17}/><span>File</span></button>
+          <button className={`ai-button ${aiOpen ? 'active' : ''}`} onClick={() => { setAiOpen(open => !open); setFileOpen(false); setNotesOpen(false); setAiError(null) }} aria-label="Open AI diagram generator"><Sparkles size={16}/><span>AI</span></button>
+          <button className="file-button" onClick={() => { setFileOpen(v => !v); setAiOpen(false); setNotesOpen(false) }} aria-label="File menu"><Menu size={17}/><span>File</span></button>
         </div>
       </header>
+
+      {aiOpen && <form className="popover ai-popover" aria-label="AI diagram generator" onSubmit={event => { event.preventDefault(); generateAiDiagram() }}>
+        <div className="ai-head"><span className="ai-mark"><Sparkles size={17}/></span><div><strong>Generate a diagram</strong><small>Creates editable Stillboard objects</small></div><button type="button" className="ai-close" onClick={() => { aiAbortRef.current?.abort(); setAiOpen(false) }} aria-label="Close AI panel"><X size={16}/></button></div>
+        <label className="ai-field"><span>OpenAI API key</span><div className="ai-key-input"><KeyRound size={15}/><input type="password" autoComplete="off" spellCheck={false} value={aiKey} onChange={event => setAiKey(event.target.value)} placeholder="sk-…" aria-label="OpenAI API key"/></div></label>
+        <div className="ai-key-row"><small>Held only in memory for this tab.</small>{aiKey && <button type="button" onClick={() => setAiKey('')}>Forget key</button>}</div>
+        <label className="ai-field"><span>What should AI create?</span><textarea value={aiPrompt} onChange={event => setAiPrompt(event.target.value)} placeholder="Design a scalable video streaming system with CDN, transcoding, queues, storage, cache, and monitoring…" maxLength={4000} aria-label="AI diagram prompt"/></label>
+        <div className="ai-examples"><button type="button" onClick={() => setAiPrompt('Design a scalable URL shortener with API gateway, application services, Redis cache, database, analytics queue, and worker service.')}>URL shortener</button><button type="button" onClick={() => setAiPrompt('Create a system design for a video streaming platform with clients, CDN, API gateway, authentication, upload service, transcoding queue and workers, metadata database, cache, and object storage.')}>Video platform</button></div>
+        <div className="ai-options"><label><span>Model</span><select value={aiModel} onChange={event => setAiModel(event.target.value)} aria-label="OpenAI model"><option value="gpt-5.4-mini">GPT-5.4 mini</option><option value="gpt-5-mini">GPT-5 mini</option></select></label><span>Uses your OpenAI account</span></div>
+        {aiError && <div className="ai-error" role="alert">{aiError}</div>}
+        <button className="ai-generate" type="submit" disabled={aiBusy || !aiKey.trim() || !aiPrompt.trim()}>{aiBusy ? <><LoaderCircle className="spin" size={16}/> Generating…</> : <><Sparkles size={16}/> Generate diagram</>}</button>
+        <p className="ai-disclosure">Only this prompt is sent through your Vercel function to OpenAI. Your key is not saved in boards or browser storage. Use a restricted project key with a spending limit.</p>
+      </form>}
 
       {notesOpen && <div className="popover notes-popover">
         <div className="popover-head"><div><strong>Your boards</strong><small>Only on this device</small></div><button className="new-note" onClick={createNote}><Plus size={15}/> New</button></div>
@@ -775,7 +820,9 @@ function ElementView({ el, selected, draft = false }: { el: BoardElement; select
     const lines = el.textBox ? wrapText(el.text ?? '', el.width, el.fontSize ?? 22) : (el.text ?? '').split('\n')
     content = <><rect className="text-hit-area" width={el.width} height={el.height} fill="transparent" stroke="none" pointerEvents="all"/><text aria-label={el.text} x={x} y={el.fontSize ?? 22} fill={el.stroke} stroke="none" opacity={el.opacity} textAnchor={el.align === 'center' ? 'middle' : el.align === 'right' ? 'end' : 'start'} fontFamily={el.fontFamily} fontSize={el.fontSize} fontWeight={el.bold ? 700 : 400} fontStyle={el.italic ? 'italic' : 'normal'}>{lines.map((line, i) => <tspan x={x} dy={i ? '1.3em' : undefined} key={i}>{line || ' '}</tspan>)}</text></>
   }
-  return <g transform={transform} {...attr} className={selected ? 'element selected-element' : 'element'}>{content}</g>
+  const labelLines = el.label ? wrapText(el.label, Math.max(70, el.width - 18), el.type === 'arrow' || el.type === 'line' ? 12 : 14) : []
+  const labelY = el.type === 'arrow' || el.type === 'line' ? el.height / 2 - 7 : el.height / 2 - (labelLines.length - 1) * 9 + 5
+  return <g transform={transform} {...attr} className={selected ? 'element selected-element' : 'element'}>{content}{labelLines.length > 0 && <text className={`element-label ${el.type === 'arrow' || el.type === 'line' ? 'edge-label' : ''}`} x={el.width / 2} y={labelY} textAnchor="middle" fontSize={el.type === 'arrow' || el.type === 'line' ? 12 : 14}>{labelLines.map((line, index) => <tspan key={index} x={el.width / 2} dy={index ? '1.25em' : undefined}>{line}</tspan>)}</text>}</g>
 }
 
 function SelectionBox({ bounds: b, zoom, onResize, onRotate }: { bounds: { x: number; y: number; width: number; height: number }; zoom: number; onResize: (e: React.PointerEvent, corner: string) => void; onRotate: (e: React.PointerEvent) => void }) {

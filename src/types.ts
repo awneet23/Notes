@@ -26,6 +26,7 @@ export type BoardElement = {
   italic?: boolean
   align?: 'left' | 'center' | 'right'
   iconName?: string
+  label?: string
   textBox?: boolean
   startBinding?: ConnectionBinding
   endBinding?: ConnectionBinding

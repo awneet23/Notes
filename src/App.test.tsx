@@ -366,4 +366,31 @@ describe('Stillboard core interactions', () => {
     fireEvent.pointerUp(canvas, { button: 0, pointerId: 49, clientX: 450, clientY: 140 })
     expect(canvas.querySelector('[data-element-type="arrow"]')?.getAttribute('transform')).not.toBe(arrowBefore)
   })
+
+  it('generates an editable native diagram without persisting the API key', async () => {
+    const key = 'sk-test-user-key-12345678901234567890'
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ diagram: {
+        title: 'Login system',
+        nodes: [
+          { id: 'client', label: 'Web client', kind: 'client', x: 0, y: 0, width: 140, height: 70 },
+          { id: 'auth', label: 'Auth service', kind: 'service', x: 260, y: 0, width: 150, height: 70 },
+        ],
+        edges: [{ from: 'client', to: 'auth', label: 'Login' }],
+      } }),
+    })))
+    render(<App />)
+    const canvas = await screen.findByLabelText('Infinite whiteboard canvas')
+    fireEvent.click(screen.getByRole('button', { name: 'Open AI diagram generator' }))
+    fireEvent.change(screen.getByLabelText('OpenAI API key'), { target: { value: key } })
+    fireEvent.change(screen.getByLabelText('AI diagram prompt'), { target: { value: 'Create a login system' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Generate diagram' }))
+    await waitFor(() => expect(canvas.querySelectorAll('[data-element-id]')).toHaveLength(3))
+    expect(canvas.querySelectorAll('[data-element-type="rectangle"]')).toHaveLength(2)
+    expect(canvas.querySelectorAll('[data-element-type="arrow"]')).toHaveLength(1)
+    await waitFor(() => expect(vi.mocked(saveDocument).mock.calls.length).toBeGreaterThan(0), { timeout: 1500 })
+    expect(JSON.stringify(vi.mocked(saveDocument).mock.calls)).not.toContain(key)
+    expect(screen.queryByLabelText('AI diagram generator')).toBeNull()
+  })
 })

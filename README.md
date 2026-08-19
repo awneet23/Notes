@@ -1,6 +1,6 @@
 # Stillboard
 
-Stillboard is a private, local-first infinite whiteboard. It runs entirely in the browser and stores boards in IndexedDB on the current device. There is no backend, account, analytics, telemetry, or cloud synchronization.
+Stillboard is a private, local-first infinite whiteboard. It stores boards in IndexedDB on the current device. There is no account, analytics, telemetry, or cloud synchronization. Its optional AI diagram generator uses a stateless Vercel Function only when the user explicitly submits a prompt.
 
 ## Run locally
 
@@ -21,6 +21,8 @@ Run the local interaction, geometry, export, and IndexedDB regression suite with
 ```bash
 npm test -- --maxWorkers=1
 ```
+
+The normal whiteboard works with `npm run dev`. To exercise the `/api/openai-diagram` Vercel Function locally, run the project with `vercel dev`.
 
 ## Controls
 
@@ -43,7 +45,17 @@ The compact Canvas menu controls each board's color and paper style. Available p
 
 ## Privacy model
 
-All authored content is persisted through the browser's IndexedDB and explicit local file downloads. Nothing is synchronized between devices. The app includes no remote fonts, remote images, analytics, content APIs, accounts, or cloud storage.
+All authored content is persisted through the browser's IndexedDB and explicit local file downloads. Nothing is synchronized between devices. The app includes no remote fonts, remote images, analytics, accounts, or cloud storage.
+
+## Optional OpenAI integration
+
+Open the **AI** panel, enter a personal OpenAI API key, and describe a diagram. Stillboard calls the OpenAI Responses API with strict structured output, then converts the result into native editable shapes, labels, and bound connectors.
+
+- The API key is held only in React memory for the current tab. It is not written to IndexedDB, `localStorage`, board autosaves, service-worker caches, or exports.
+- The same-origin Vercel Function forwards the key and prompt for that request and does not log or store them in application code.
+- The request sets `store: false`. No existing board content is sent; only the prompt typed into the AI panel is included.
+- OpenAI recommends keeping API keys out of browser applications. This BYOK mode is therefore opt-in and should be used with a restricted project key, a low spending limit, and rotation/revocation when appropriate.
+- No Vercel environment variable is required because each user supplies their own key.
 
 ## Install and offline use
 
