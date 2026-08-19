@@ -10,6 +10,8 @@ describe('vector export', () => {
       { ...base, id: 'arrow', type: 'arrow' },
       { ...base, id: 'pen', type: 'pen', points: [{ x: 0, y: 0 }, { x: 50, y: 25 }] },
       { ...base, id: 'text', type: 'text', text: 'A & B', fontSize: 20, fontFamily: 'sans-serif', align: 'left' },
+      { ...base, id: 'star', type: 'star' },
+      { ...base, id: 'heart', type: 'icon', iconName: 'heart' },
     ]
 
     const { svg, width, height } = createSvg(elements, '#eaf1f8')
@@ -20,5 +22,7 @@ describe('vector export', () => {
     expect(svg).toContain('transform="scale(2 2)"')
     expect(svg).toContain('A &amp; B')
     expect(svg).toContain('fill="#eaf1f8"')
+    expect(svg).toContain('viewBox="0 0 24 24"')
+    expect(svg).toContain('a5.5 5.5')
   })
 })

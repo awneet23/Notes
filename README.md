@@ -28,7 +28,7 @@ npm test -- --maxWorkers=1
 - Pan: `H`, middle mouse, or hold Space.
 - Pen: `P`; hold Shift when releasing a rough stroke to tidy it into a line, ellipse, or rectangle.
 - Text: `T`; double-click existing text to edit it.
-- Eraser: `E`; Line: `L`; Arrow: `A`; Rectangle: `R`; Ellipse: `O`; Diamond: `D`.
+- Eraser: `E`; Line: `L`; Arrow: `A`. Open the compact Shapes & Icons library for diagram shapes and reusable symbol stamps. Rectangle: `R`; Ellipse: `O`; Diamond: `D`.
 - Undo/redo: `Ctrl/Cmd+Z` and `Ctrl/Cmd+Y`.
 - Save locally: `Ctrl/Cmd+S`.
 - Delete selection: `Delete` or `Backspace`.

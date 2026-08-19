@@ -5,6 +5,11 @@ import { saveDocument } from './db'
 import { exportSvg } from './export'
 import './styles.css'
 
+const chooseLibraryItem = async (name: string) => {
+  fireEvent.click(screen.getByRole('button', { name: 'Shapes and icons' }))
+  fireEvent.click(await screen.findByRole('button', { name }))
+}
+
 vi.mock('./db', () => {
   const doc = {
     id: 'test-board', name: 'Test board', elements: [], view: { x: 0, y: 0, zoom: 1 },
@@ -72,10 +77,10 @@ describe('Stillboard core interactions', () => {
 
   it('creates a shape and restores the board with undo', async () => {
     render(<App />)
-    const rectangleTool = await screen.findByRole('button', { name: 'Rectangle tool' })
+    await screen.findByRole('button', { name: 'Shapes and icons' })
     const canvas = screen.getByLabelText('Infinite whiteboard canvas')
 
-    fireEvent.click(rectangleTool)
+    await chooseLibraryItem('Rectangle shape')
     fireEvent.pointerDown(canvas, { button: 0, pointerId: 2, clientX: 100, clientY: 120 })
     fireEvent.pointerMove(canvas, { buttons: 1, pointerId: 2, clientX: 240, clientY: 210 })
     fireEvent.pointerUp(canvas, { button: 0, pointerId: 2, clientX: 240, clientY: 210 })
@@ -110,7 +115,7 @@ describe('Stillboard core interactions', () => {
   it('moves, resizes, rotates, deletes, undoes, and redoes a selection', async () => {
     render(<App />)
     const canvas = await screen.findByLabelText('Infinite whiteboard canvas')
-    fireEvent.click(screen.getByRole('button', { name: 'Rectangle tool' }))
+    await chooseLibraryItem('Rectangle shape')
     fireEvent.pointerDown(canvas, { button: 0, pointerId: 5, clientX: 100, clientY: 120 })
     fireEvent.pointerMove(canvas, { buttons: 1, pointerId: 5, clientX: 240, clientY: 210 })
     fireEvent.pointerUp(canvas, { button: 0, pointerId: 5, clientX: 240, clientY: 210 })
@@ -163,6 +168,28 @@ describe('Stillboard core interactions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'File menu' }))
     fireEvent.click(await screen.findByText('Export SVG'))
     expect(exportSvg).toHaveBeenCalledOnce()
+  })
+
+  it('keeps extra vector shapes and icon stamps in one compact library', async () => {
+    render(<App />)
+    const canvas = await screen.findByLabelText('Infinite whiteboard canvas')
+
+    await chooseLibraryItem('Star shape')
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 18, clientX: 100, clientY: 100 })
+    fireEvent.pointerMove(canvas, { buttons: 1, pointerId: 18, clientX: 200, clientY: 200 })
+    fireEvent.pointerUp(canvas, { button: 0, pointerId: 18, clientX: 200, clientY: 200 })
+    expect(canvas.querySelector('[data-element-id] path')).not.toBeNull()
+
+    await chooseLibraryItem('Heart icon')
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 19, clientX: 260, clientY: 100 })
+    fireEvent.pointerMove(canvas, { buttons: 1, pointerId: 19, clientX: 340, clientY: 180 })
+    fireEvent.pointerUp(canvas, { button: 0, pointerId: 19, clientX: 340, clientY: 180 })
+    expect(canvas.querySelector('[data-icon-name="heart"]')).not.toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Shapes and icons' }))
+    expect(await screen.findByRole('dialog', { name: 'Shape and icon library' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Cloud shape' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Database icon' })).toBeTruthy()
   })
 
   it('changes the canvas background without showing a text-entry box', async () => {

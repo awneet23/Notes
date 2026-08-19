@@ -1,5 +1,6 @@
 import type { BoardDocument, BoardElement } from './types'
 import { boundsOf, smoothPath } from './geometry'
+import { extendedShapePath, ICON_PATHS, type ExtendedShape } from './vectorLibrary'
 
 const esc = (s: string) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]!))
 
@@ -15,6 +16,11 @@ function elementSvg(el: BoardElement): string {
   if (el.type === 'rectangle') return `<g transform="${transform}"><rect width="${el.width}" height="${el.height}" rx="8" ${common}/></g>`
   if (el.type === 'ellipse') return `<g transform="${transform}"><ellipse cx="${el.width / 2}" cy="${el.height / 2}" rx="${el.width / 2}" ry="${el.height / 2}" ${common}/></g>`
   if (el.type === 'diamond') return `<g transform="${transform}"><path d="M ${el.width / 2} 0 L ${el.width} ${el.height / 2} L ${el.width / 2} ${el.height} L 0 ${el.height / 2} Z" ${common}/></g>`
+  if (['triangle', 'pentagon', 'hexagon', 'star', 'cloud', 'cylinder', 'speech'].includes(el.type)) return `<g transform="${transform}"><path d="${extendedShapePath(el.type as ExtendedShape, el.width, el.height)}" ${common}/></g>`
+  if (el.type === 'icon') {
+    const paths = (ICON_PATHS[el.iconName ?? 'check'] ?? ICON_PATHS.check).map(path => `<path d="${path}" vector-effect="non-scaling-stroke"/>`).join('')
+    return `<g transform="${transform}" fill="none" stroke="${esc(el.stroke)}" stroke-width="${el.strokeWidth}" opacity="${el.opacity}" stroke-linecap="round" stroke-linejoin="round"><svg width="${el.width}" height="${el.height}" viewBox="0 0 24 24">${paths}</svg></g>`
+  }
   if (el.type === 'line' || el.type === 'arrow') {
     const x1 = el.flipX ? el.width : 0, y1 = el.flipY ? el.height : 0
     const x2 = el.flipX ? 0 : el.width, y2 = el.flipY ? 0 : el.height

@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
-  ArrowRight, Bold, BoxSelect, Check, ChevronDown, Circle, Copy, Diamond, Download, Eraser,
-  FileJson, Focus, FolderOpen, Hand, Italic, Menu, MousePointer2, Pencil, Plus, Redo2,
-  RotateCw, Save, Slash, Square, Trash2, Type, Undo2, ZoomIn, ZoomOut,
+  ArrowRight, Bold, BoxSelect, Check, ChevronDown, Circle, Cloud, Copy, Cylinder, Database, Diamond, Download, Eraser,
+  FileJson, Flag, Focus, FolderOpen, Hand, Heart, Hexagon, House, Italic, Lightbulb, Menu, MessageSquare, MousePointer2, Pencil, Pentagon, Plus, Redo2,
+  Save, Shapes, Slash, Square, Star, Trash2, Triangle, Type, Undo2, UserRound, X, ZoomIn, ZoomOut,
 } from 'lucide-react'
 import type { BoardDocument, BoardElement, NoteMeta, Point, Tool, ViewState } from './types'
 import { DEFAULT_BACKGROUND, DEFAULT_VIEW, newDocument, uid } from './types'
 import { boundsOf, normalizedBox, pointsToElement, recognizeStroke, smoothPath } from './geometry'
 import { deleteDocument, getDocument, listDocuments, saveDocument } from './db'
 import { exportPng, exportProject, exportSvg } from './export'
+import { extendedShapePath, ICON_PATHS, type ExtendedShape } from './vectorLibrary'
 
 const COLORS = ['#1e2522', '#e05252', '#dc7d26', '#d1a617', '#3b8b65', '#3178c6', '#7357bd', '#f2f2ee']
 const FILLS = ['transparent', '#fff1a8', '#dff3e8', '#deecff', '#f0e6ff', '#ffe4e4']
@@ -21,10 +22,21 @@ const TOOL_ITEMS: { tool: Tool; label: string; key: string; icon: typeof MousePo
   { tool: 'text', label: 'Text', key: 'T', icon: Type },
   { tool: 'line', label: 'Line', key: 'L', icon: Slash },
   { tool: 'arrow', label: 'Arrow', key: 'A', icon: ArrowRight },
-  { tool: 'rectangle', label: 'Rectangle', key: 'R', icon: Square },
-  { tool: 'ellipse', label: 'Ellipse', key: 'O', icon: Circle },
-  { tool: 'diamond', label: 'Diamond', key: 'D', icon: Diamond },
 ]
+const SHAPE_ITEMS: { tool: Tool; label: string; icon: typeof Square }[] = [
+  { tool: 'rectangle', label: 'Rectangle', icon: Square }, { tool: 'ellipse', label: 'Ellipse', icon: Circle },
+  { tool: 'diamond', label: 'Diamond', icon: Diamond }, { tool: 'triangle', label: 'Triangle', icon: Triangle },
+  { tool: 'pentagon', label: 'Pentagon', icon: Pentagon }, { tool: 'hexagon', label: 'Hexagon', icon: Hexagon },
+  { tool: 'star', label: 'Star', icon: Star }, { tool: 'cloud', label: 'Cloud', icon: Cloud },
+  { tool: 'cylinder', label: 'Cylinder', icon: Cylinder }, { tool: 'speech', label: 'Speech bubble', icon: MessageSquare },
+]
+const ICON_ITEMS: { name: string; label: string; icon: typeof Check }[] = [
+  { name: 'check', label: 'Check', icon: Check }, { name: 'cross', label: 'Cross', icon: X },
+  { name: 'heart', label: 'Heart', icon: Heart }, { name: 'idea', label: 'Idea', icon: Lightbulb },
+  { name: 'person', label: 'Person', icon: UserRound }, { name: 'home', label: 'Home', icon: House },
+  { name: 'database', label: 'Database', icon: Database }, { name: 'flag', label: 'Flag', icon: Flag },
+]
+const LIBRARY_TOOLS: Tool[] = [...SHAPE_ITEMS.map(item => item.tool), 'icon']
 
 type Interaction =
   | { type: 'pan'; start: Point; view: ViewState }
@@ -80,6 +92,8 @@ function App() {
   const [notes, setNotes] = useState<NoteMeta[]>([])
   const [notesOpen, setNotesOpen] = useState(false)
   const [fileOpen, setFileOpen] = useState(false)
+  const [libraryOpen, setLibraryOpen] = useState(false)
+  const [selectedIcon, setSelectedIcon] = useState('check')
   const [status, setStatus] = useState<'saved' | 'saving' | 'unsaved'>('saved')
   const [stroke, setStroke] = useState('#1e2522')
   const [fill, setFill] = useState('transparent')
@@ -184,10 +198,10 @@ function App() {
     const box = normalizedBox(a, b, constrain)
     return {
       id: uid(), type: shapeTool as BoardElement['type'], x: box.x, y: box.y, width: box.width, height: box.height,
-      rotation: 0, stroke, fill: shapeTool === 'line' || shapeTool === 'arrow' ? 'transparent' : fill,
-      strokeWidth, opacity: 1, flipX: box.flipX, flipY: box.flipY,
+      rotation: 0, stroke, fill: shapeTool === 'line' || shapeTool === 'arrow' || shapeTool === 'icon' ? 'transparent' : fill,
+      strokeWidth, opacity: 1, flipX: box.flipX, flipY: box.flipY, ...(shapeTool === 'icon' ? { iconName: selectedIcon } : {}),
     }
-  }, [stroke, fill, strokeWidth])
+  }, [stroke, fill, strokeWidth, selectedIcon])
 
   const beginText = useCallback((p: Point, el?: BoardElement, caret?: number) => {
     if (el) {
@@ -234,6 +248,7 @@ function App() {
 
   const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
     if (e.button === 2) return
+    if (libraryOpen) setLibraryOpen(false)
     const target = (e.target as Element).closest?.('[data-element-id]') as SVGElement | null
     const hitId = target?.dataset.elementId
     const hitElement = elements.find(el => el.id === hitId)
@@ -261,7 +276,7 @@ function App() {
       return
     }
     if (tool === 'pen') { setInteractionBoth({ type: 'draw', points: [p] }); return }
-    if (['line', 'arrow', 'rectangle', 'ellipse', 'diamond'].includes(tool)) { setInteractionBoth({ type: 'shape', start: p, current: p, tool }); return }
+    if (['line', 'arrow', ...LIBRARY_TOOLS].includes(tool)) { setInteractionBoth({ type: 'shape', start: p, current: p, tool }); return }
     if (tool === 'select') {
       if (hitId) {
         if (e.shiftKey) {
@@ -345,7 +360,9 @@ function App() {
         commit(prev => [...prev, el]); setSelected([el.id])
       }
     } else if (active.type === 'shape') {
-      const el = makeShape(active.tool, active.start, active.current, e.shiftKey)
+      const distance = Math.hypot(active.current.x - active.start.x, active.current.y - active.start.y)
+      const current = distance < 4 / view.zoom ? { x: active.start.x + (active.tool === 'icon' ? 64 : 100), y: active.start.y + (active.tool === 'icon' ? 64 : 70) } : active.current
+      const el = makeShape(active.tool, active.start, current, e.shiftKey || active.tool === 'icon')
       commit(prev => [...prev, el]); setSelected([el.id]); setTool('select')
     } else if (active.type === 'marquee') {
       const b = normalizedBox(active.start, active.current)
@@ -440,9 +457,11 @@ function App() {
       if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); manualSave(); return }
       if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); setSelected(elements.map(el => el.id)); setTool('select'); return }
       if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelection(); return }
-      if (e.key === 'Escape') { setSelected([]); setTextEdit(null); setInteractionBoth(null); return }
+      if (e.key === 'Escape') { setSelected([]); setTextEdit(null); setLibraryOpen(false); setInteractionBoth(null); return }
       const found = TOOL_ITEMS.find(item => item.key.toLowerCase() === e.key.toLowerCase())
-      if (found && !e.ctrlKey && !e.metaKey) setTool(found.tool)
+      const shapeShortcut = ({ r: 'rectangle', o: 'ellipse', d: 'diamond' } as Record<string, Tool>)[e.key.toLowerCase()]
+      if (found && !e.ctrlKey && !e.metaKey) { setTool(found.tool); setLibraryOpen(false) }
+      else if (shapeShortcut && !e.ctrlKey && !e.metaKey) { setTool(shapeShortcut); setLibraryOpen(false) }
       if ((e.key === '+' || e.key === '=') && !e.ctrlKey) zoomAt(view.zoom * 1.15)
       if (e.key === '-' && !e.ctrlKey) zoomAt(view.zoom / 1.15)
     }
@@ -498,9 +517,15 @@ function App() {
 
       <nav className="toolbar" aria-label="Drawing tools">
         {TOOL_ITEMS.map(({ tool: item, label, key, icon: Icon }, index) => <div key={item} className={index === 4 || index === 5 ? 'tool-divider-before' : ''}>
-          <button className={tool === item ? 'active' : ''} onClick={() => { setTool(item); if (item !== 'select') setSelected([]) }} aria-label={`${label} tool`} title={`${label} (${key})`}><Icon size={19}/><kbd>{key}</kbd></button>
+          <button className={tool === item ? 'active' : ''} onClick={() => { setTool(item); setLibraryOpen(false); if (item !== 'select') setSelected([]) }} aria-label={`${label} tool`} title={`${label} (${key})`}><Icon size={19}/><kbd>{key}</kbd></button>
         </div>)}
+        <div className="tool-divider-before library-tool"><button className={LIBRARY_TOOLS.includes(tool) ? 'active' : ''} onClick={() => setLibraryOpen(open => !open)} aria-label="Shapes and icons" title="Shapes and icons (R / O / D)"><Shapes size={20}/><ChevronDown className="tool-chevron" size={10}/></button></div>
       </nav>
+
+      {libraryOpen && <div className="popover shape-library" role="dialog" aria-label="Shape and icon library">
+        <div className="library-section"><strong>Shapes</strong><div className="library-grid">{SHAPE_ITEMS.map(({ tool: shape, label, icon: Icon }) => <button key={shape} className={tool === shape ? 'active' : ''} aria-label={`${label} shape`} title={label} onClick={() => { setTool(shape); setSelected([]); setLibraryOpen(false) }}><Icon size={21}/><span>{label}</span></button>)}</div></div>
+        <div className="library-section"><strong>Icons</strong><div className="library-grid icon-grid">{ICON_ITEMS.map(({ name: iconName, label, icon: Icon }) => <button key={iconName} className={tool === 'icon' && selectedIcon === iconName ? 'active' : ''} aria-label={`${label} icon`} title={label} onClick={() => { setSelectedIcon(iconName); setTool('icon'); setSelected([]); setLibraryOpen(false) }}><Icon size={21}/><span>{label}</span></button>)}</div></div>
+      </div>}
 
       <section className="canvas-wrap">
         <svg ref={svgRef} className="canvas" aria-label="Infinite whiteboard canvas" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onWheel={onWheel} onDoubleClick={e => {
@@ -526,7 +551,7 @@ function App() {
       <div className="stylebar">
         <div className="style-group canvas-colors"><span className="style-label">Canvas</span>{CANVAS_BACKGROUNDS.map(color => <button key={color} aria-label={`Canvas background ${color}`} className={`color-swatch canvas-swatch ${background === color ? 'active' : ''}`} style={{ background: color }} onClick={() => setBackground(color)}/>)}</div>
         <div className="style-group"><span className="style-label">Stroke</span>{COLORS.map(color => <button key={color} aria-label={`Stroke ${color}`} className={`color-swatch ${stroke === color ? 'active' : ''}`} style={{ background: color }} onClick={() => { setStroke(color); applyStyle({ stroke: color }) }}/>)}</div>
-        {tool !== 'pen' && tool !== 'text' && <div className="style-group"><span className="style-label">Fill</span>{FILLS.map(color => <button key={color} aria-label={`Fill ${color}`} className={`color-swatch fill ${fill === color ? 'active' : ''} ${color === 'transparent' ? 'transparent' : ''}`} style={{ background: color === 'transparent' ? '#fff' : color }} onClick={() => { setFill(color); applyStyle({ fill: color }) }}/>)}</div>}
+        {tool !== 'pen' && tool !== 'text' && tool !== 'icon' && !selectedElements.some(el => el.type === 'icon') && <div className="style-group"><span className="style-label">Fill</span>{FILLS.map(color => <button key={color} aria-label={`Fill ${color}`} className={`color-swatch fill ${fill === color ? 'active' : ''} ${color === 'transparent' ? 'transparent' : ''}`} style={{ background: color === 'transparent' ? '#fff' : color }} onClick={() => { setFill(color); applyStyle({ fill: color }) }}/>)}</div>}
         <div className="style-group widths"><span className="style-label">Width</span>{[2, 3, 6].map(width => <button key={width} className={strokeWidth === width ? 'active' : ''} onClick={() => { setStrokeWidth(width); applyStyle({ strokeWidth: width }) }} aria-label={`Stroke width ${width}`}><i style={{ height: width }}/></button>)}</div>
         {(tool === 'text' || selectedElements.some(el => el.type === 'text')) && <>
           <div className="style-group text-format"><select aria-label="Font family" value={fontFamily} onChange={e => { setFontFamily(e.target.value); applyStyle({ fontFamily: e.target.value }) }}><option value="Inter, system-ui, sans-serif">Sans</option><option value="Georgia, serif">Serif</option><option value="ui-monospace, SFMono-Regular, monospace">Mono</option></select><select aria-label="Font size" value={fontSize} onChange={e => { const size = Number(e.target.value); setFontSize(size); applyStyle({ fontSize: size }) }}>{[14,18,22,28,36,48,64].map(size => <option key={size}>{size}</option>)}</select><button className={bold ? 'active' : ''} onClick={() => { setBold(!bold); applyStyle({ bold: !bold }) }} aria-label="Bold"><Bold size={16}/></button><button className={italic ? 'active' : ''} onClick={() => { setItalic(!italic); applyStyle({ italic: !italic }) }} aria-label="Italic"><Italic size={16}/></button>
@@ -544,7 +569,7 @@ function App() {
 function ElementView({ el, selected, draft = false }: { el: BoardElement; selected: boolean; draft?: boolean }) {
   const transform = `translate(${el.x} ${el.y}) rotate(${el.rotation} ${el.width / 2} ${el.height / 2})`
   const common = { stroke: el.stroke, fill: el.fill, strokeWidth: el.strokeWidth, opacity: draft ? .65 : el.opacity, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, vectorEffect: 'non-scaling-stroke' as const }
-  const attr = draft ? {} : { 'data-element-id': el.id }
+  const attr = draft ? {} : { 'data-element-id': el.id, ...(el.type === 'icon' ? { 'data-icon-name': el.iconName ?? 'check' } : {}) }
   let content
   if (el.type === 'pen') {
     const points = el.points ?? []
@@ -555,6 +580,8 @@ function ElementView({ el, selected, draft = false }: { el: BoardElement; select
   else if (el.type === 'rectangle') content = <rect width={el.width} height={el.height} rx={8} {...common}/>
   else if (el.type === 'ellipse') content = <ellipse cx={el.width / 2} cy={el.height / 2} rx={el.width / 2} ry={el.height / 2} {...common}/>
   else if (el.type === 'diamond') content = <path d={`M ${el.width / 2} 0 L ${el.width} ${el.height / 2} L ${el.width / 2} ${el.height} L 0 ${el.height / 2} Z`} {...common}/>
+  else if (['triangle', 'pentagon', 'hexagon', 'star', 'cloud', 'cylinder', 'speech'].includes(el.type)) content = <path d={extendedShapePath(el.type as ExtendedShape, el.width, el.height)} {...common}/>
+  else if (el.type === 'icon') content = <><rect width={el.width} height={el.height} fill="transparent" stroke="none" pointerEvents="all"/><svg width={el.width} height={el.height} viewBox="0 0 24 24" overflow="visible"><g fill="none" stroke={el.stroke} strokeWidth={el.strokeWidth} opacity={el.opacity} strokeLinecap="round" strokeLinejoin="round">{(ICON_PATHS[el.iconName ?? 'check'] ?? ICON_PATHS.check).map((path, index) => <path key={index} d={path} vectorEffect="non-scaling-stroke"/>)}</g></svg></>
   else if (el.type === 'line' || el.type === 'arrow') {
     const x1 = el.flipX ? el.width : 0, y1 = el.flipY ? el.height : 0, x2 = el.flipX ? 0 : el.width, y2 = el.flipY ? 0 : el.height
     content = <line x1={x1} y1={y1} x2={x2} y2={y2} {...common} markerEnd={el.type === 'arrow' ? 'url(#arrowhead)' : undefined}/>

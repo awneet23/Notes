@@ -1,10 +1,10 @@
-export type Tool = 'select' | 'hand' | 'pen' | 'eraser' | 'text' | 'line' | 'arrow' | 'rectangle' | 'ellipse' | 'diamond'
+export type Tool = 'select' | 'hand' | 'pen' | 'eraser' | 'text' | 'line' | 'arrow' | 'rectangle' | 'ellipse' | 'diamond' | 'triangle' | 'pentagon' | 'hexagon' | 'star' | 'cloud' | 'cylinder' | 'speech' | 'icon'
 
 export type Point = { x: number; y: number }
 
 export type BoardElement = {
   id: string
-  type: 'pen' | 'line' | 'arrow' | 'rectangle' | 'ellipse' | 'diamond' | 'text'
+  type: 'pen' | 'line' | 'arrow' | 'rectangle' | 'ellipse' | 'diamond' | 'triangle' | 'pentagon' | 'hexagon' | 'star' | 'cloud' | 'cylinder' | 'speech' | 'icon' | 'text'
   x: number
   y: number
   width: number
@@ -23,6 +23,7 @@ export type BoardElement = {
   bold?: boolean
   italic?: boolean
   align?: 'left' | 'center' | 'right'
+  iconName?: string
 }
 
 export type ViewState = { x: number; y: number; zoom: number }
