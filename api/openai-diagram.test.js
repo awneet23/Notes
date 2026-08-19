@@ -37,4 +37,22 @@ describe('OpenAI diagram proxy', () => {
     expect(response.statusCode).toBe(400)
     expect(fetchMock).not.toHaveBeenCalled()
   })
+
+  it('answers board-aware chat questions as plain text without storing the response', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'The API Gateway is a likely bottleneck.' }] }] }) }))
+    vi.stubGlobal('fetch', fetchMock)
+    const response = responseMock()
+    await handler({
+      method: 'POST', headers: { 'x-openai-key': 'sk-test-12345678901234567890' },
+      body: { mode: 'chat', question: 'Review this design', board: { name: 'System', objects: [{ id: 'api', type: 'rectangle', text: 'API Gateway' }], connections: [] }, history: [{ role: 'user', content: 'Focus on reliability' }], model: 'gpt-5.4-mini' },
+    }, response)
+    expect(response.statusCode).toBe(200)
+    expect(response.body).toEqual({ answer: 'The API Gateway is a likely bottleneck.' })
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(body.store).toBe(false)
+    expect(body.text).toEqual({ verbosity: 'medium' })
+    expect(body.text.format).toBeUndefined()
+    expect(JSON.stringify(body.input)).toContain('API Gateway')
+    expect(JSON.stringify(body.input)).toContain('CURRENT QUESTION')
+  })
 })

@@ -49,11 +49,12 @@ All authored content is persisted through the browser's IndexedDB and explicit l
 
 ## Optional OpenAI integration
 
-Open the **AI** panel, enter a personal OpenAI API key, and describe a diagram. Stillboard calls the OpenAI Responses API with strict structured output, then converts the result into native editable shapes, labels, and bound connectors.
+Open the **AI** panel and enter a personal OpenAI API key. **Chat** can answer general questions or review the current board without an image upload. **Create** uses strict structured output and converts a requested diagram into native editable shapes, labels, and bound connectors. Generated diagrams are arranged locally with a collision-free layered layout instead of trusting model coordinates.
 
 - The API key is held only in React memory for the current tab. It is not written to IndexedDB, `localStorage`, board autosaves, service-worker caches, or exports.
-- The same-origin Vercel Function forwards the key and prompt for that request and does not log or store them in application code.
-- The request sets `store: false`. No existing board content is sent; only the prompt typed into the AI panel is included.
+- The same-origin Vercel Function forwards the key and AI request and does not log or store them in application code.
+- Requests set `store: false`. Create sends only its prompt. When a user submits a Chat question, Stillboard also sends a compact snapshot of the current board's object types, text, positions, selection, and connections so the answer can be board-aware. Raw freehand point arrays are excluded.
+- Chat messages are held only in React memory for the current tab and are not added to board autosaves.
 - OpenAI recommends keeping API keys out of browser applications. This BYOK mode is therefore opt-in and should be used with a restricted project key, a low spending limit, and rotation/revocation when appropriate.
 - No Vercel environment variable is required because each user supplies their own key.
 

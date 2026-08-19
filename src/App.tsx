@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowRight, Bold, BoxSelect, Check, ChevronDown, Circle, Cloud, Copy, Cylinder, Database, Diamond, Download, Eraser,
-  FileJson, Flag, Focus, FolderOpen, Hand, Heart, Hexagon, House, Italic, Lightbulb, Menu, MessageSquare, MousePointer2, Pencil, Pentagon, Plus, Redo2,
+  FileJson, Flag, Focus, FolderOpen, Hand, Heart, Hexagon, House, Italic, Lightbulb, Menu, MessageSquare, MousePointer2, Pencil, Pentagon, Plus, Redo2, Send,
   KeyRound, LoaderCircle, PaintBucket, Palette, Save, Shapes, Slash, Sparkles, Square, Star, Trash2, Triangle, Type, Undo2, UserRound, X, ZoomIn, ZoomOut,
 } from 'lucide-react'
 import type { BoardDocument, BoardElement, CanvasPattern, ConnectionSide, NoteMeta, Point, Tool, ViewState } from './types'
@@ -10,7 +10,7 @@ import { boundsOf, erasePenPoints, normalizedBox, pointsToElement, recognizeStro
 import { deleteDocument, getDocument, listDocuments, saveDocument } from './db'
 import { exportPng, exportProject, exportSvg } from './export'
 import { extendedShapePath, ICON_PATHS, type ExtendedShape } from './vectorLibrary'
-import { diagramToElements, requestDiagram } from './ai'
+import { diagramToElements, requestBoardChat, requestDiagram, serializeBoardForAI, type AiMessage } from './ai'
 
 const COLORS = ['#1e2522', '#5f6360', '#e05252', '#e87926', '#d1a617', '#3b8b65', '#238b8e', '#3178c6', '#7357bd', '#c65b9a', '#f2f2ee']
 const FILLS = ['transparent', '#fff1a8', '#f8dfca', '#ffe4e4', '#dff3e8', '#d9f1ef', '#deecff', '#f0e6ff', '#ecefed']
@@ -143,6 +143,9 @@ function App() {
   const [fileOpen, setFileOpen] = useState(false)
   const [aiOpen, setAiOpen] = useState(false)
   const [aiKey, setAiKey] = useState('')
+  const [aiMode, setAiMode] = useState<'chat' | 'create'>('chat')
+  const [aiQuestion, setAiQuestion] = useState('')
+  const [aiMessages, setAiMessages] = useState<AiMessage[]>([])
   const [aiPrompt, setAiPrompt] = useState('')
   const [aiModel, setAiModel] = useState('gpt-5.4-mini')
   const [aiBusy, setAiBusy] = useState(false)
@@ -622,6 +625,26 @@ function App() {
     }
   }
 
+  const askAiAboutBoard = async () => {
+    const key = aiKey.trim(), question = aiQuestion.trim()
+    if (key.length < 20) { setAiError('Enter your OpenAI API key.'); return }
+    if (!question) { setAiError('Ask a question about this board.'); return }
+    if (aiBusy) return
+    const history = aiMessages.slice(-10)
+    setAiMessages(previous => [...previous, { role: 'user', content: question }])
+    setAiQuestion(''); setAiBusy(true); setAiError(null)
+    const controller = new AbortController(); aiAbortRef.current = controller
+    try {
+      const board = serializeBoardForAI({ name, elements, background, canvasPattern }, selected)
+      const answer = await requestBoardChat(key, question, board, history, aiModel, controller.signal)
+      setAiMessages(previous => [...previous, { role: 'assistant', content: answer }])
+    } catch (error) {
+      if ((error as Error).name !== 'AbortError') setAiError(error instanceof Error ? error.message : 'AI request failed.')
+    } finally {
+      aiAbortRef.current = null; setAiBusy(false)
+    }
+  }
+
   const exportElements = selected.length ? elements.filter(el => selected.includes(el.id)) : elements
 
   useEffect(() => {
@@ -673,21 +696,33 @@ function App() {
         <div className="top-actions">
           <button className="icon-button" onClick={undo} disabled={!historyRef.current.length} aria-label="Undo" title="Undo"><Undo2 size={18}/></button>
           <button className="icon-button" onClick={redo} disabled={!futureRef.current.length} aria-label="Redo" title="Redo"><Redo2 size={18}/></button>
-          <button className={`ai-button ${aiOpen ? 'active' : ''}`} onClick={() => { setAiOpen(open => !open); setFileOpen(false); setNotesOpen(false); setAiError(null) }} aria-label="Open AI diagram generator"><Sparkles size={16}/><span>AI</span></button>
+          <button className={`ai-button ${aiOpen ? 'active' : ''}`} onClick={() => { setAiOpen(open => !open); setFileOpen(false); setNotesOpen(false); setAiError(null) }} aria-label="Open Stillboard AI"><Sparkles size={16}/><span>AI</span></button>
           <button className="file-button" onClick={() => { setFileOpen(v => !v); setAiOpen(false); setNotesOpen(false) }} aria-label="File menu"><Menu size={17}/><span>File</span></button>
         </div>
       </header>
 
-      {aiOpen && <form className="popover ai-popover" aria-label="AI diagram generator" onSubmit={event => { event.preventDefault(); generateAiDiagram() }}>
-        <div className="ai-head"><span className="ai-mark"><Sparkles size={17}/></span><div><strong>Generate a diagram</strong><small>Creates editable Stillboard objects</small></div><button type="button" className="ai-close" onClick={() => { aiAbortRef.current?.abort(); setAiOpen(false) }} aria-label="Close AI panel"><X size={16}/></button></div>
+      {aiOpen && <form className="popover ai-popover" aria-label="Stillboard AI" onSubmit={event => { event.preventDefault(); aiMode === 'chat' ? askAiAboutBoard() : generateAiDiagram() }}>
+        <div className="ai-head"><span className="ai-mark"><Sparkles size={17}/></span><div><strong>Stillboard AI</strong><small>Ask about this board or create a diagram</small></div><button type="button" className="ai-close" onClick={() => { aiAbortRef.current?.abort(); setAiOpen(false) }} aria-label="Close AI panel"><X size={16}/></button></div>
         <label className="ai-field"><span>OpenAI API key</span><div className="ai-key-input"><KeyRound size={15}/><input type="password" autoComplete="off" spellCheck={false} value={aiKey} onChange={event => setAiKey(event.target.value)} placeholder="sk-…" aria-label="OpenAI API key"/></div></label>
         <div className="ai-key-row"><small>Held only in memory for this tab.</small>{aiKey && <button type="button" onClick={() => setAiKey('')}>Forget key</button>}</div>
-        <label className="ai-field"><span>What should AI create?</span><textarea value={aiPrompt} onChange={event => setAiPrompt(event.target.value)} placeholder="Design a scalable video streaming system with CDN, transcoding, queues, storage, cache, and monitoring…" maxLength={4000} aria-label="AI diagram prompt"/></label>
-        <div className="ai-examples"><button type="button" onClick={() => setAiPrompt('Design a scalable URL shortener with API gateway, application services, Redis cache, database, analytics queue, and worker service.')}>URL shortener</button><button type="button" onClick={() => setAiPrompt('Create a system design for a video streaming platform with clients, CDN, API gateway, authentication, upload service, transcoding queue and workers, metadata database, cache, and object storage.')}>Video platform</button></div>
+        <div className="ai-tabs" role="tablist" aria-label="AI mode"><button type="button" role="tab" aria-selected={aiMode === 'chat'} className={aiMode === 'chat' ? 'active' : ''} onClick={() => { setAiMode('chat'); setAiError(null) }}><MessageSquare size={14}/> Chat</button><button type="button" role="tab" aria-selected={aiMode === 'create'} className={aiMode === 'create' ? 'active' : ''} onClick={() => { setAiMode('create'); setAiError(null) }}><Shapes size={14}/> Create</button></div>
+        {aiMode === 'chat' ? <>
+          <div className="ai-context"><span className="status-dot"/><strong>Current board attached</strong><span>{elements.length} object{elements.length === 1 ? '' : 's'}</span></div>
+          <div className="ai-chat" aria-live="polite">
+            {!aiMessages.length && <div className="ai-welcome"><span className="ai-mini-mark"><Sparkles size={15}/></span><p>I can review this design, trace flows, spot bottlenecks, summarize the board, or answer a general question.</p></div>}
+            {aiMessages.map((message, index) => <div key={`${message.role}-${index}`} className={`ai-message ${message.role}`}><span>{message.role === 'user' ? 'You' : 'AI'}</span><p>{message.content}</p></div>)}
+            {aiBusy && <div className="ai-message assistant thinking"><span>AI</span><p><LoaderCircle className="spin" size={14}/> Reading the board…</p></div>}
+          </div>
+          {!aiMessages.length && <div className="ai-examples"><button type="button" onClick={() => setAiQuestion('Review this design and suggest the three most important improvements.')}>Review this design</button><button type="button" onClick={() => setAiQuestion('Find bottlenecks or missing failure handling in this architecture.')}>Find bottlenecks</button><button type="button" onClick={() => setAiQuestion('Explain the main request and data flow on this board.')}>Explain the flow</button></div>}
+          <label className="ai-field ai-chat-input"><span>Ask anything</span><textarea value={aiQuestion} onChange={event => setAiQuestion(event.target.value)} placeholder="Give me feedback on this design…" maxLength={4000} aria-label="Ask AI about this board"/></label>
+        </> : <>
+          <label className="ai-field"><span>What should AI create?</span><textarea value={aiPrompt} onChange={event => setAiPrompt(event.target.value)} placeholder="Design a scalable video streaming system with CDN, transcoding, queues, storage, cache, and monitoring…" maxLength={4000} aria-label="AI diagram prompt"/></label>
+          <div className="ai-examples"><button type="button" onClick={() => setAiPrompt('Design a scalable URL shortener with API gateway, application services, Redis cache, database, analytics queue, and worker service.')}>URL shortener</button><button type="button" onClick={() => setAiPrompt('Create a system design for a video streaming platform with clients, CDN, API gateway, authentication, upload service, transcoding queue and workers, metadata database, cache, and object storage.')}>Video platform</button></div>
+        </>}
         <div className="ai-options"><label><span>Model</span><select value={aiModel} onChange={event => setAiModel(event.target.value)} aria-label="OpenAI model"><option value="gpt-5.4-mini">GPT-5.4 mini</option><option value="gpt-5-mini">GPT-5 mini</option></select></label><span>Uses your OpenAI account</span></div>
         {aiError && <div className="ai-error" role="alert">{aiError}</div>}
-        <button className="ai-generate" type="submit" disabled={aiBusy || !aiKey.trim() || !aiPrompt.trim()}>{aiBusy ? <><LoaderCircle className="spin" size={16}/> Generating…</> : <><Sparkles size={16}/> Generate diagram</>}</button>
-        <p className="ai-disclosure">Only this prompt is sent through your Vercel function to OpenAI. Your key is not saved in boards or browser storage. Use a restricted project key with a spending limit.</p>
+        <button className="ai-generate" type="submit" disabled={aiBusy || !aiKey.trim() || !(aiMode === 'chat' ? aiQuestion : aiPrompt).trim()}>{aiBusy ? <><LoaderCircle className="spin" size={16}/> {aiMode === 'chat' ? 'Thinking…' : 'Generating…'}</> : aiMode === 'chat' ? <><Send size={15}/> Send question</> : <><Sparkles size={16}/> Generate diagram</>}</button>
+        <p className="ai-disclosure">Chat sends your question and a compact structure of the current board through your Vercel function to OpenAI. Raw pen points are excluded. Your key and chat are not saved in boards or browser storage. Use a restricted project key with a spending limit.</p>
       </form>}
 
       {notesOpen && <div className="popover notes-popover">
