@@ -33,6 +33,7 @@ npm test -- --maxWorkers=1
 - Save locally: `Ctrl/Cmd+S`.
 - Delete selection: `Delete` or `Backspace`.
 - Zoom: Ctrl/Cmd + wheel, `+`/`-`, or the controls at bottom right. A regular wheel/trackpad gesture pans.
+- Phone/tablet: one finger uses the selected tool; two fingers pan and pinch-zoom the board.
 
 The File menu exports editable `.stillboard` project files as well as PNG and SVG. If objects are selected, PNG/SVG export contains the selection; otherwise it contains the entire board.
 
@@ -40,4 +41,8 @@ The compact Canvas menu controls each board's color and paper style. Available p
 
 ## Privacy model
 
-All authored content is persisted through the browser's IndexedDB and explicit local file downloads. The app makes no runtime network requests and includes no remote fonts, remote images, analytics, or content APIs. Package downloads are needed only while installing/building the app.
+All authored content is persisted through the browser's IndexedDB and explicit local file downloads. Nothing is synchronized between devices. The app includes no remote fonts, remote images, analytics, content APIs, accounts, or cloud storage.
+
+## Install and offline use
+
+After the deployed site has loaded successfully once, its app shell is cached for offline use. On a phone, use the browser's **Add to Home Screen** or **Install app** action to launch Stillboard like an app. The service worker caches only same-origin application files; board content remains in that device's IndexedDB and is never placed in the app-shell cache.

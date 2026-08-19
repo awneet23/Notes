@@ -57,6 +57,8 @@ type TextEdit = { id?: string; x: number; y: number; value: string; caret?: numb
 
 const cloneElements = (els: BoardElement[]) => els.map(el => ({ ...el, points: el.points?.map(p => ({ ...p })) }))
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform)
+const midpoint = (a: Point, b: Point): Point => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 })
+const pointDistance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y)
 const textDimensions = (value: string, size: number) => {
   const lines = value.split('\n')
   const longest = Math.max(0, ...lines.map(line => line.length))
@@ -129,6 +131,8 @@ function App() {
   const createdAtRef = useRef(Date.now())
   const skipSaveRef = useRef(true)
   const saveTimerRef = useRef<number | null>(null)
+  const touchPointsRef = useRef(new Map<number, Point>())
+  const touchGestureRef = useRef<{ distance: number; world: Point; startView: ViewState } | null>(null)
 
   const showToast = useCallback((message: string) => {
     setToast(message)
@@ -262,6 +266,28 @@ function App() {
 
   const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
     if (e.button === 2) return
+    if (e.pointerType === 'touch') {
+      touchPointsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+      svgRef.current?.setPointerCapture(e.pointerId)
+      if (touchPointsRef.current.size >= 2) {
+        const [first, second] = [...touchPointsRef.current.values()]
+        const center = midpoint(first, second)
+        const rect = svgRef.current?.getBoundingClientRect() ?? { left: 0, top: 0 }
+        if (textEdit) finishText()
+        setInteractionBoth(null)
+        touchGestureRef.current = {
+          distance: Math.max(1, pointDistance(first, second)),
+          world: {
+            x: (center.x - rect.left - view.x) / view.zoom,
+            y: (center.y - rect.top - view.y) / view.zoom,
+          },
+          startView: { ...view },
+        }
+        setLibraryOpen(false)
+        setStyleMenu(null)
+        return
+      }
+    }
     if (libraryOpen) setLibraryOpen(false)
     if (styleMenu) setStyleMenu(null)
     const target = (e.target as Element).closest?.('[data-element-id]') as SVGElement | null
@@ -279,7 +305,7 @@ function App() {
       else beginText(p)
       return
     }
-    svgRef.current?.setPointerCapture(e.pointerId)
+    if (e.pointerType !== 'touch') svgRef.current?.setPointerCapture(e.pointerId)
     if (e.button === 1 || tool === 'hand' || spaceDown) {
       setInteractionBoth({ type: 'pan', start: { x: e.clientX, y: e.clientY }, view: { ...view } }); return
     }
@@ -306,6 +332,22 @@ function App() {
   }
 
   const onPointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (e.pointerType === 'touch' && touchPointsRef.current.has(e.pointerId)) {
+      touchPointsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+      const gesture = touchGestureRef.current
+      if (gesture && touchPointsRef.current.size >= 2) {
+        const [first, second] = [...touchPointsRef.current.values()]
+        const center = midpoint(first, second)
+        const rect = svgRef.current?.getBoundingClientRect() ?? { left: 0, top: 0 }
+        const zoom = Math.max(.1, Math.min(4, gesture.startView.zoom * pointDistance(first, second) / gesture.distance))
+        setView({
+          zoom,
+          x: center.x - rect.left - gesture.world.x * zoom,
+          y: center.y - rect.top - gesture.world.y * zoom,
+        })
+        return
+      }
+    }
     const active = interactionRef.current
     if (!active) {
       if (tool === 'eraser' && e.buttons === 1) {
@@ -359,6 +401,15 @@ function App() {
   }
 
   const onPointerUp = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (e.pointerType === 'touch') {
+      const wasGesture = touchGestureRef.current !== null
+      touchPointsRef.current.delete(e.pointerId)
+      if (wasGesture) {
+        if (touchPointsRef.current.size < 2) touchGestureRef.current = null
+        setInteractionBoth(null)
+        return
+      }
+    }
     const active = interactionRef.current
     if (!active) return
     if (active.type === 'draw' && active.points.length) {

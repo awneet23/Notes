@@ -10,6 +10,15 @@ const chooseLibraryItem = async (name: string) => {
   fireEvent.click(await screen.findByRole('button', { name }))
 }
 
+const fireTouchPointer = (target: Element, type: string, pointerId: number, clientX: number, clientY: number) => {
+  const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX, clientY, button: 0, buttons: type === 'pointerup' ? 0 : 1 })
+  Object.defineProperties(event, {
+    pointerId: { value: pointerId },
+    pointerType: { value: 'touch' },
+  })
+  fireEvent(target, event)
+}
+
 vi.mock('./db', () => {
   const doc = {
     id: 'test-board', name: 'Test board', elements: [], view: { x: 0, y: 0, zoom: 1 },
@@ -168,6 +177,22 @@ describe('Stillboard core interactions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'File menu' }))
     fireEvent.click(await screen.findByText('Export SVG'))
     expect(exportSvg).toHaveBeenCalledOnce()
+  })
+
+  it('uses two fingers to pan and pinch without creating a canvas element', async () => {
+    render(<App />)
+    const canvas = await screen.findByLabelText('Infinite whiteboard canvas')
+
+    fireTouchPointer(canvas, 'pointerdown', 31, 100, 100)
+    fireTouchPointer(canvas, 'pointerdown', 32, 200, 100)
+    fireTouchPointer(canvas, 'pointermove', 32, 250, 100)
+
+    expect(screen.getByRole('button', { name: '150%' })).toBeTruthy()
+    expect(canvas.querySelector('g')?.getAttribute('transform')).toContain('scale(1.5)')
+    expect(canvas.querySelectorAll('[data-element-id]')).toHaveLength(0)
+
+    fireTouchPointer(canvas, 'pointerup', 31, 100, 100)
+    fireTouchPointer(canvas, 'pointerup', 32, 250, 100)
   })
 
   it('keeps extra vector shapes and icon stamps in one compact library', async () => {

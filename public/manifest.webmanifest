@@ -1,0 +1,21 @@
+{
+  "name": "Stillboard — Private Whiteboard",
+  "short_name": "Stillboard",
+  "description": "A private, local-first infinite whiteboard.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f8f7f3",
+  "theme_color": "#28382f",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/stillboard-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
